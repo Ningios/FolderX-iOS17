@@ -153,7 +153,8 @@ void FXDiagProbeImageView(UIView *imageView) {
     [FXDiagProbed addObject:cls];
 
     NSMutableString *chain = [NSMutableString string];
-    for (UIView *v = imageView, NSUInteger step = 0; v && step < 7; v = v.superview, ++step) {
+    NSUInteger step = 0;
+    for (UIView *v = imageView; v && step < 7; v = v.superview, ++step) {
         if (step) [chain appendString:@" < "];
         [chain appendString:NSStringFromClass(v.class)];
     }
