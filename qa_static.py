@@ -66,7 +66,7 @@ print('NOT TESTED: Theos compile / real SpringBoard transitions / native 4x2 cla
 drop=src['FXDrop.xm']
 assert 'addIcons:intoFolderIcon:openFolderOnFinish:completion:' in drop
 assert 'addIcons:intoFolderIcon:openFolderOnFinish:complete:' not in drop
-assert 'FXCaptureNativeTargets(self.window)' in drop
+assert 'FXCaptureNativeTargets(dragWindow)' in drop and '((UIView *)self).window' in drop
 assert 'FXCachedTargetForList(list, point)' in drop
 assert 'FXListModel(current)' in drop
 

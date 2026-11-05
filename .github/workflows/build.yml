@@ -32,8 +32,8 @@ jobs:
 
       - name: Build package
         run: |
-          set -e
-          make clean package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide 2>&1 | tail -120
+          set -eo pipefail
+          make clean package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide 2>&1 | tail -200
 
       - name: Inspect result
         run: |

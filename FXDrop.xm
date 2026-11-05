@@ -415,8 +415,11 @@ static BOOL FXReconcileAfterNativeDrop(id source, id folder, NSString *uid,
     // pause assertion and picture lock BEFORE sampling the next native grid.
     // The old session's asynchronous cleanup is generation-checked below.
     if (valid && FXDraggedLeaf) FXClearSource();
-    NSArray<NSDictionary *> *nativeTargets = valid ? FXCaptureNativeTargets(self.window) : nil;
-    NSArray<UIView *> *visualHosts = valid ? FXCaptureVisualHosts(self.window) : nil;
+    // SBIconView is only forward-declared inside this Logos hook; use the
+    // UIKit superclass to reach the window (self.window does not type-check).
+    UIWindow *dragWindow = ((UIView *)self).window;
+    NSArray<NSDictionary *> *nativeTargets = valid ? FXCaptureNativeTargets(dragWindow) : nil;
+    NSArray<UIView *> *visualHosts = valid ? FXCaptureVisualHosts(dragWindow) : nil;
     // Install the visual lock before %orig; keep actual drop-target admission
     // restricted to the separate, verified native grid-range list.
     for (UIView *host in visualHosts) FXSetDragVisualLockForHost(host, YES);
