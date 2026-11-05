@@ -1,4 +1,5 @@
 #import "FXCore.h"
+#import "FXDiag.h"
 #import <dispatch/dispatch.h>
 #import <math.h>
 #import <string.h>
@@ -407,13 +408,29 @@ id FXFolderWithIdentifier(NSString *uid) {
 BOOL FXChangeSize(id icon, FXFolderSize target, BOOL persist) {
     icon = FXCurrentRootIcon(icon);
     if (!FXIsFolder(icon) || (target != FXFolderSizeSmall &&
-        target != FXFolderSizeLarge && target != FXFolderSizeWide)) return NO;
-    if (target == FXFolderSizeWide && !FXCanUseWideGrid()) return NO;
+        target != FXFolderSizeLarge && target != FXFolderSizeWide)) {
+        FXDiagLog(@"size.fail notfolder target=%lu folder=%d",
+                  (unsigned long)target, (int)FXIsFolder(icon));
+        return NO;
+    }
+    if (target == FXFolderSizeWide && !FXCanUseWideGrid()) {
+        FXDiagLog(@"size.fail wide-unverified");
+        return NO;
+    }
     id list = FXListModel(icon);
     SEL change = NSSelectorFromString(@"changeGridSizeClassOfContainedIcon:toGridSizeClass:gridCellInfoOptions:");
-    if (!list || ![list respondsToSelector:change]) return NO;
+    if (!list || ![list respondsToSelector:change]) {
+        FXDiagLog(@"size.fail no-list list=%d sel=%d", (int)(list != nil),
+                  (int)(list && [list respondsToSelector:change]));
+        return NO;
+    }
     NSMethodSignature *signature = [list methodSignatureForSelector:change];
-    if (!signature || signature.numberOfArguments != 5) return NO;
+    if (!signature || signature.numberOfArguments != 5) {
+        FXDiagLog(@"size.fail signature args=%lu ret=%s",
+                  (unsigned long)(signature ? signature.numberOfArguments : 0),
+                  signature ? signature.methodReturnType : "?");
+        return NO;
+    }
 
     FXGridRange before = FXGridOf(list, icon);
     if (FXSize(icon) == target &&
@@ -428,12 +445,19 @@ BOOL FXChangeSize(id icon, FXFolderSize target, BOOL persist) {
     // resized a completely full page and icons vanished instead of overflowing
     // into a new page; unlike a safe native drag, this method is not a page
     // reflow transaction. Do not mutate an overcrowded page.
-    if (target != FXFolderSizeSmall && !FXPreflightExpansion(icon, list, target)) return NO;
+    if (target != FXFolderSizeSmall && !FXPreflightExpansion(icon, list, target)) {
+        FXDiagLog(@"size.fail preflight capacity=%lu target=%lu",
+                  (unsigned long)FXPageCellCapacity(list), (unsigned long)target);
+        return NO;
+    }
     NSArray<NSString *> *beforeInventory = FXRootInventory();
     NSUInteger beforeCount = FXRootItemCount();
     // An identifier-only failure is no longer an unconditional refusal. We
     // still require a complete root item count and spare cells on this page.
-    if (beforeCount == NSUIntegerMax) return NO;
+    if (beforeCount == NSUIntegerMax) {
+        FXDiagLog(@"size.fail rootcount-unreadable");
+        return NO;
+    }
     NSUInteger original = FXSize(icon);
     @try {
         // Private API observed for the target version. Do not assume an
@@ -455,6 +479,11 @@ BOOL FXChangeSize(id icon, FXFolderSize target, BOOL persist) {
         (!beforeInventory || (afterInventory &&
                               [afterInventory isEqualToArray:beforeInventory]));
     BOOL good = FXSize(icon) == target && geometryOK && inventoryOK;
+    FXDiagLog(@"size.apply target=%lu size=%lu range=%lux%lu geometry=%d inventory=%d before=%lu after=%lu",
+              (unsigned long)target, (unsigned long)FXSize(icon),
+              (unsigned long)after.columns, (unsigned long)after.rows,
+              (int)geometryOK, (int)inventoryOK, (unsigned long)beforeCount,
+              (unsigned long)afterCount);
     if (!good && original != target) {
         // The contract has failed: do not persist the enlarged size. This is a
         // best-effort immediate rollback; a manual backup remains essential.
@@ -476,6 +505,9 @@ void FXRestoreSizeForView(UIView *host) {
     if (!uid || !saved || (saved.unsignedIntegerValue != FXFolderSizeLarge &&
                           saved.unsignedIntegerValue != FXFolderSizeWide)) return;
     if (FXIsGenuineLarge(icon)) return;
+    FXDiagLog(@"restore.schedule saved=%lu editing=%d drag=%d",
+              (unsigned long)saved.unsignedIntegerValue, (int)FXIsEditing(host),
+              (int)FXNativeDragIsActive());
 
     // Only schedule once per (reused) icon view/identifier; no repeating timers.
     NSString *scheduledUID = objc_getAssociatedObject(host, &kFXRestoreScheduled);

@@ -308,6 +308,10 @@ static void FXMarkHandled(UIView *host, id app) {
         self.resizing = FXIsEditing(self.host) && self.host.window && !FXNativeDragIsActive();
         self.startSize = FXSize(FXObject(self.host, @"icon"));
         self.passedThreshold = NO;
+        FXDiagLog(@"pan.begin resizing=%d editing=%d window=%d start=%lu icon=%@",
+                  self.resizing, (int)FXIsEditing(self.host), (int)(self.host.window != nil),
+                  (unsigned long)self.startSize,
+                  NSStringFromClass([FXObject(self.host, @"icon") class]));
         if (self.resizing) [self.feedback prepare];
         return;
     }
@@ -340,6 +344,7 @@ static void FXMarkHandled(UIView *host, id app) {
         CGFloat dx = delta.x, dy = delta.y;
         if (!ended || MAX(fabs(dx), fabs(dy)) < 16.0) {
             self.passedThreshold = NO;
+            FXDiagLog(@"pan.ignore ended=%d dx=%.0f dy=%.0f", ended, dx, dy);
             return;
         }
         FXFolderSize target = self.startSize;
@@ -355,6 +360,9 @@ static void FXMarkHandled(UIView *host, id app) {
         } else if (self.startSize == FXFolderSizeWide) {
             if (dx < -16.0 || dy < -16.0) target = FXFolderSizeLarge;
         }
+        FXDiagLog(@"pan.end start=%lu target=%lu dx=%.0f dy=%.0f wide=%d",
+                  (unsigned long)self.startSize, (unsigned long)target, dx, dy,
+                  (int)FXCanUseWideGrid());
         if (self.startSize != target) [self commitSize:target];
     }
 }
@@ -929,8 +937,13 @@ void FXRefreshIconView(UIView *host) {
 // A single checked resize transaction is shared by the invisible corner
 // gesture and the system context-menu action. No fabricated view geometry.
 BOOL FXCommitSizeForHost(UIView *host, FXFolderSize size) {
-    if (!host || !FXIsFolder(FXObject(host, @"icon"))) return NO;
-    if (!host.window || FXNativeDragIsActive() || FXNativeFolderIsPresented) return NO;
+    if (!host || !FXIsFolder(FXObject(host, @"icon"))) { FXDiagLog(@"commit.host reject"); return NO; }
+    if (!host.window || FXNativeDragIsActive() || FXNativeFolderIsPresented) {
+        FXDiagLog(@"commit.host blocked window=%d drag=%d presented=%d",
+                  (int)(host.window != nil), (int)FXNativeDragIsActive(),
+                  (int)FXNativeFolderIsPresented);
+        return NO;
+    }
     if (!FXChangeSize(FXObject(host, @"icon"), size, YES)) return NO;
     [host setNeedsLayout];
     Class listClass = NSClassFromString(@"SBIconListView");
@@ -949,9 +962,14 @@ BOOL FXCommitSizeForHost(UIView *host, FXFolderSize size) {
 // Context menu previews can replace the SBIconView while dismissing. Resolve
 // the current live folder by stable UID; do not depend on the stale weak view.
 BOOL FXCommitSizeForIdentifier(NSString *uid, FXFolderSize size) {
-    if (!uid.length || FXNativeDragIsActive() || FXNativeFolderIsPresented) return NO;
+    if (!uid.length || FXNativeDragIsActive() || FXNativeFolderIsPresented) {
+        FXDiagLog(@"commit.uid blocked uid=%d drag=%d presented=%d", (int)(uid.length > 0),
+                  (int)FXNativeDragIsActive(), (int)FXNativeFolderIsPresented);
+        return NO;
+    }
     id folder = FXFolderWithIdentifier(uid);
-    if (!folder || !FXChangeSize(folder, size, YES)) return NO;
+    if (!folder) { FXDiagLog(@"commit.uid folder-not-found"); return NO; }
+    if (!FXChangeSize(folder, size, YES)) return NO;
     for (UIView *host in FXKnownFolderHosts.allObjects) {
         if (!host.window || ![FXIdentifier(FXObject(host, @"icon")) isEqualToString:uid])
             continue;
@@ -1008,6 +1026,13 @@ void FXRefreshNativeImageView(UIView *imageView) {
             FXMiniGrid *visible = objc_getAssociatedObject(view, &kFXOverlayKey);
             id icon = FXObject(view, @"icon");
             UIView *actualImage = FXNativeImageView(view) ?: imageView;
+            // 1.5.6 logged hide=1 on the App Library indicator's image view:
+            // SB*IconImageView subclasses share these selectors. Only a real
+            // folder icon may have its native grid suppressed.
+            if (!FXIsFolder(icon)) {
+                FXSetNativeThumbnailVisibility(actualImage, NO);
+                return;
+            }
             FXStabilizeNativeImageDuringDrag(view, actualImage);
             CGFloat height = view.bounds.size.height;
             BOOL frameMatches = fabs(actualImage.bounds.size.width - view.bounds.size.width) <= 5.0 &&
@@ -1121,6 +1146,9 @@ UIView *FXResizeHitView(UIView *host, CGPoint point, UIEvent *event) {
         objc_setAssociatedObject(host, &kFXResizeTouchPendingUntilKey,
                                  @(CACurrentMediaTime() + 1.05),
                                  OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    FXDiagThrottled([NSString stringWithFormat:@"hit/%p", host], 0.3,
+                    @"resize.hit host=%p bounds=%.0fx%.0f local=%.0f,%.0f",
+                    host, host.bounds.size.width, host.bounds.size.height, local.x, local.y);
     return handle;
 }
 

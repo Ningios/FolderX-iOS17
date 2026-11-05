@@ -1,4 +1,5 @@
 #import "FXInterface.h"
+#import "FXDiag.h"
 
 // SpringBoard-native folder size and gesture extension:
 //  1. Native list-model 1x1 <-> 2x2 occupancy, not frame scaling.
@@ -26,6 +27,9 @@
 
 - (void)setEditing:(BOOL)editing animated:(BOOL)animated {
     %orig;
+    FXDiagChanged([NSString stringWithFormat:@"edit/%@", NSStringFromClass([FXObject(self, @"icon") class])],
+                  [NSString stringWithFormat:@"editing=%d icon=%@", editing,
+                   NSStringFromClass([FXObject(self, @"icon") class])]);
     FXRememberEditingForView((UIView *)self, editing);
     FXRefreshIconView((UIView *)self);
 }
