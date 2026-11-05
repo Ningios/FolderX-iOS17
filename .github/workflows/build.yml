@@ -7,28 +7,27 @@ on:
 
 jobs:
   build:
-    runs-on: macos-14
-    timeout-minutes: 30
+    # macOS minutes are exhausted on this account (jobs are cancelled within
+    # seconds); Linux runners bill at 1x and are still available.
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install toolchain
+      - name: Install Theos (Linux)
         run: |
           set -e
-          brew install ldid xz || true
-          git clone --recursive --depth 1 -q https://github.com/roothide/theos.git "$HOME/theos"
+          git clone --recursive --depth 1 https://github.com/roothide/theos.git "$HOME/theos"
+          export THEOS="$HOME/theos"
           echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
-          echo "PATH=$HOME/theos/bin:$PATH" >> "$GITHUB_ENV"
+          echo "$HOME/theos/bin" >> "$GITHUB_PATH"
+          "$HOME/theos/bin/install-theos"
 
-      - name: Provide iOS SDK from Xcode
+      - name: Show environment
         run: |
           set -e
-          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-          VER=$(xcrun --sdk iphoneos --show-sdk-version)
-          echo "SDK=$SDK ($VER)"
-          mkdir -p "$HOME/theos/sdks"
-          ln -sfn "$SDK" "$HOME/theos/sdks/iPhoneOS${VER}.sdk"
-          ls -la "$HOME/theos/sdks"
+          "$THEOS/toolchain/linux/iphone/bin/clang" --version | head -2
+          ls "$THEOS/sdks"
 
       - name: Build package
         run: |
@@ -37,18 +36,13 @@ jobs:
 
       - name: Inspect result
         run: |
-          ls -la packages/ || true
-          for f in packages/*.deb; do
-            [ -e "$f" ] || continue
-            echo "--- $f"
-            size=$(wc -c < "$f"); sha=$(shasum -a 256 "$f" | cut -d' ' -f1)
-            echo "SIZE=$size SHA256=$sha"
-            ar p "$f" control.tar.gz > /tmp/c.tar.gz || true
-            tar -xzOf /tmp/c.tar.gz ./control 2>/dev/null || true
-            ar t "$f" || true
-          done
+          set -e
+          ls -la packages/
           for f in packages/*.deb; do
             [ -e "$f" ] || { echo "NO DEB PRODUCED"; exit 1; }
+            echo "--- $f"
+            echo "SIZE=$(wc -c < "$f") SHA256=$(sha256sum "$f" | cut -d' ' -f1)"
+            ar t "$f"
           done
 
       - uses: actions/upload-artifact@v4
