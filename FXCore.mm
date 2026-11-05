@@ -314,32 +314,62 @@ static NSUInteger FXRootItemCount(void) {
 // Prefer the actual layout model's rows/columns. The 1.4.0 magic fallback
 // of 20 cells was smaller than a 4-column x 6-row iPhone 15 Pro home page.
 static NSUInteger FXPageCellCapacity(id list) {
-    SEL sizeSel = NSSelectorFromString(@"gridSize");
-    if ([list respondsToSelector:sizeSel]) {
-        NSMethodSignature *sig = [list methodSignatureForSelector:sizeSel];
-        if (sig && sig.numberOfArguments == 2 &&
-            sig.methodReturnLength == sizeof(CGSize) &&
-            sig.methodReturnType[0] == '{') {
-            CGSize (*readSize)(id, SEL) = (CGSize (*)(id, SEL))objc_msgSend;
-            CGSize size = readSize(list, sizeSel);
-            // Supports (columns,rows) or (rows,columns); both have 24 cells.
-            if (size.width >= 3 && size.width <= 8 &&
-                size.height >= 3 && size.height <= 9 &&
-                floor(size.width) == size.width && floor(size.height) == size.height)
-                return (NSUInteger)(size.width * size.height);
+    if (!list) return 0;
+    // iOS 17 exposes the page grid through several struct ABIs: a 4-byte
+    // uint16 pair, an 8-byte uint32 pair, or a 16-byte CGFloat pair. The old
+    // code required exactly sizeof(CGSize) and therefore returned 0 on
+    // iOS 17.2.1, making FXPreflightExpansion refuse every expansion with
+    // "capacity=0" even though the gesture and the model were both fine.
+    for (NSString *name in @[@"gridSize", @"iconGridSize"]) {
+        SEL sel = NSSelectorFromString(name);
+        if (![list respondsToSelector:sel]) continue;
+        NSMethodSignature *sig = [list methodSignatureForSelector:sel];
+        if (!sig || sig.numberOfArguments != 2 || sig.methodReturnType[0] != '{') continue;
+        NSUInteger length = sig.methodReturnLength;
+        if (length != 4 && length != 8 && length != 16) continue;
+        uint8_t bytes[16] = {0};
+        @try {
+            NSInvocation *call = [NSInvocation invocationWithMethodSignature:sig];
+            call.target = list;
+            call.selector = sel;
+            [call invoke];
+            [call getReturnValue:bytes];
+        } @catch (__unused NSException *exception) { continue; }
+        NSUInteger a = 0, b = 0;
+        if (length == 4) {
+            uint16_t pair[2]; memcpy(pair, bytes, sizeof(pair)); a = pair[0]; b = pair[1];
+        } else if (length == 8) {
+            uint32_t pair[2]; memcpy(pair, bytes, sizeof(pair)); a = pair[0]; b = pair[1];
+        } else {
+            double pair[2]; memcpy(pair, bytes, sizeof(pair));
+            if (isfinite(pair[0]) && isfinite(pair[1])) {
+                a = (NSUInteger)pair[0]; b = (NSUInteger)pair[1];
+            } else {
+                uint64_t raw[2]; memcpy(raw, bytes, sizeof(raw));
+                a = (NSUInteger)raw[0]; b = (NSUInteger)raw[1];
+            }
         }
+        FXDiagChanged(@"capacity.probe",
+                      [NSString stringWithFormat:@"sel=%@ len=%lu a=%lu b=%lu",
+                       name, (unsigned long)length, (unsigned long)a, (unsigned long)b]);
+        // (columns,rows) and (rows,columns) share the same product.
+        if (a >= 2 && a <= 12 && b >= 2 && b <= 12) return a * b;
     }
     NSUInteger maximum = FXUnsigned(list, @"maxIconCount");
-    if (maximum != NSUIntegerMax && maximum >= 12 && maximum <= 48)
-        return maximum;
-    // Device-specific fallback only for the stated iPhone 15 Pro display,
-    // running the iOS 17 4x6 home grid. Other layouts fail closed.
+    if (maximum == NSUIntegerMax) maximum = FXUnsigned(list, @"maximumIconCount");
+    FXDiagChanged(@"capacity.max",
+                  [NSString stringWithFormat:@"maxIconCount=%lu",
+                   (unsigned long)maximum]);
+    if (maximum != NSUIntegerMax && maximum >= 6 && maximum <= 60) return maximum;
+    // Last resort: every iPhone runs the standard 4-column home grid.
     CGSize screen = UIScreen.mainScreen.bounds.size;
-    CGFloat narrow = MIN(screen.width, screen.height);
-    CGFloat tall = MAX(screen.width, screen.height);
+    FXDiagChanged(@"capacity.screen",
+                  [NSString stringWithFormat:@"%.0fx%.0f idiom=%ld",
+                   screen.width, screen.height,
+                   (long)UIDevice.currentDevice.userInterfaceIdiom]);
     if (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone &&
-        narrow >= 390 && narrow <= 395 && tall >= 850 && tall <= 855)
-        return 24;
+        MIN(screen.width, screen.height) >= 320 && MAX(screen.width, screen.height) >= 480)
+        return 24; // 4 columns x 6 rows
     return 0;
 }
 
@@ -446,8 +476,12 @@ BOOL FXChangeSize(id icon, FXFolderSize target, BOOL persist) {
     // into a new page; unlike a safe native drag, this method is not a page
     // reflow transaction. Do not mutate an overcrowded page.
     if (target != FXFolderSizeSmall && !FXPreflightExpansion(icon, list, target)) {
-        FXDiagLog(@"size.fail preflight capacity=%lu target=%lu",
-                  (unsigned long)FXPageCellCapacity(list), (unsigned long)target);
+        NSArray *preflightIcons = FXObject(list, @"icons");
+        FXDiagLog(@"size.fail preflight capacity=%lu array=%d count=%lu target=%lu",
+                  (unsigned long)FXPageCellCapacity(list),
+                  (int)[preflightIcons isKindOfClass:NSArray.class],
+                  (unsigned long)([preflightIcons isKindOfClass:NSArray.class] ? preflightIcons.count : 0),
+                  (unsigned long)target);
         return NO;
     }
     NSArray<NSString *> *beforeInventory = FXRootInventory();
