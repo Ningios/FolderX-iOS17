@@ -1,7 +1,6 @@
 #import "FXDiag.h"
 #import <objc/runtime.h>
 #import <QuartzCore/QuartzCore.h>
-#import <sys/sysctl.h>
 
 // Opt-in diagnostic channel. Everything here is read-only observation: it
 // never mutates SpringBoard state, only records which branch the existing
@@ -195,19 +194,8 @@ void FXDiagInstall(void) {
             @"==== FolderX diag start %@ | iOS %@ (%@) | %@ %@ | main=%@ ====",
             [NSDate date], device.systemVersion, [info objectForKey:@"CFBundleVersion"],
             device.model, device.systemName, NSBundle.mainBundle.bundleIdentifier];
-        CGSize screen = UIScreen.mainScreen.bounds.size;
-        char machine[64] = {0};
-        size_t machineSize = sizeof(machine);
-        if (sysctlbyname("hw.machine", machine, &machineSize, NULL, 0) != 0)
-            snprintf(machine, sizeof(machine), "unknown");
-        NSString *env = [NSString stringWithFormat:
-            @"==== screen %.0fx%.0f scale=%.2f machine=%s idiom=%ld ====",
-            screen.width, screen.height, UIScreen.mainScreen.scale, machine,
-            (long)UIDevice.currentDevice.userInterfaceIdiom];
-        NSMutableData *all = [NSMutableData data];
-        [all appendData:[[line stringByAppendingString:@"\n"] dataUsingEncoding:NSUTF8StringEncoding]];
-        [all appendData:[[env stringByAppendingString:@"\n"] dataUsingEncoding:NSUTF8StringEncoding]];
-        @try { [handle writeData:all]; }
+        @try { [handle writeData:[[line stringByAppendingString:@"\n"]
+                                 dataUsingEncoding:NSUTF8StringEncoding]]; }
         @catch (__unused NSException *ex) { }
     });
 }
