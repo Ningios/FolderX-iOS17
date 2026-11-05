@@ -1,0 +1,9 @@
+Package: com.huhansibuxin.folderexpand
+Name: FolderX
+Version: 1.5.6~diag1
+Architecture: iphoneos-arm64
+Depends: ellekit, firmware (>= 17.0), firmware (<< 18.0)
+Description: FolderX 1.5.6 diagnostic build: opt-in branch logging for the open/close double-image and drag-layout issues.
+Maintainer: Ning&半生年华
+Author: Ning&半生年华
+Section: Tweaks

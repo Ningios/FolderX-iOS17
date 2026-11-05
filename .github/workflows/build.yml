@@ -1,0 +1,58 @@
+name: build
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          set -e
+          brew install ldid xz || true
+          git clone --recursive --depth 1 -q https://github.com/roothide/theos.git "$HOME/theos"
+          echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
+          echo "PATH=$HOME/theos/bin:$PATH" >> "$GITHUB_ENV"
+
+      - name: Provide iOS SDK from Xcode
+        run: |
+          set -e
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          VER=$(xcrun --sdk iphoneos --show-sdk-version)
+          echo "SDK=$SDK ($VER)"
+          mkdir -p "$HOME/theos/sdks"
+          ln -sfn "$SDK" "$HOME/theos/sdks/iPhoneOS${VER}.sdk"
+          ls -la "$HOME/theos/sdks"
+
+      - name: Build package
+        run: |
+          set -e
+          make clean package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide 2>&1 | tail -120
+
+      - name: Inspect result
+        run: |
+          ls -la packages/ || true
+          for f in packages/*.deb; do
+            [ -e "$f" ] || continue
+            echo "--- $f"
+            size=$(wc -c < "$f"); sha=$(shasum -a 256 "$f" | cut -d' ' -f1)
+            echo "SIZE=$size SHA256=$sha"
+            ar p "$f" control.tar.gz > /tmp/c.tar.gz || true
+            tar -xzOf /tmp/c.tar.gz ./control 2>/dev/null || true
+            ar t "$f" || true
+          done
+          for f in packages/*.deb; do
+            [ -e "$f" ] || { echo "NO DEB PRODUCED"; exit 1; }
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: folderx-deb
+          path: packages/*.deb
+          if-no-files-found: error
