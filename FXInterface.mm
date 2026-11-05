@@ -431,6 +431,7 @@ static void FXSetNativeThumbnailVisibility(UIView *imageView, BOOL hide) {
                    @"%d alphaSetter=%d", hide, touched,
                    (int)[imageView respondsToSelector:NSSelectorFromString(@"disableImageUpdatesForReason:")],
                    (int)[imageView respondsToSelector:NSSelectorFromString(@"setIconGridImageAlpha:")]]);
+    if (FXObserveOnly()) return; // never touch native rendering in observe mode
     // Set state before private setters because they may re-enter layout.
     objc_setAssociatedObject(imageView, &kFXNativeTouchedKey,
                              hide ? @YES : nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -595,6 +596,7 @@ static BOOL FXObjectMethodABI(id target, SEL selector, BOOL returnsObject,
 // acquire a native pause. Saved preferences / oversized visual bounds alone
 // are not permission to block layout.
 static void FXAcquireDragLayoutPause(UIView *host, id icon) {
+    if (FXObserveOnly()) return;
     if (objc_getAssociatedObject(host, &kFXDragLayoutLeaseKey) ||
         !host.window || !FXIsGenuineLarge(icon)) return;
     UIView *list = FXRootListForHost(host);
@@ -640,6 +642,7 @@ void FXReleaseDragLayoutPauseForHost(UIView *host) {
 // Called after source capture, when the image frame is still known-good.
 void FXSetDragVisualLockForHost(UIView *host, BOOL locked) {
     if (!host || ![host isKindOfClass:UIView.class]) return;
+    if (FXObserveOnly()) return;
     id icon = FXObject(host, @"icon");
     if (locked) {
         NSNumber *saved = FXSavedSize(icon);
@@ -697,6 +700,7 @@ static BOOL FXDragVisualLocked(UIView *host) {
 }
 
 static void FXStabilizeNativeImageDuringDrag(UIView *host, UIView *image) {
+    if (FXObserveOnly()) return;
     if (!FXDragVisualLocked(host) || !image) return;
     NSValue *parent = objc_getAssociatedObject(host, &kFXDragImageParentKey);
     NSValue *original = objc_getAssociatedObject(host, &kFXDragImageFrameKey);
@@ -837,6 +841,7 @@ void FXRefreshIconView(UIView *host) {
                    transitionGrid.superview ? NSStringFromClass(transitionGrid.superview.class) : @"nil",
                    NSStringFromClass(FXObject(host, @"icon") ?
                                      [FXObject(host, @"icon") class] : [NSObject class])]);
+    if (FXObserveOnly()) return; // observe mode installs and moves nothing
     // Atomic visual hand-off: hide the custom grid BEFORE revealing the
     // native thumbnail; on the opposite path hide native first, reveal ours
     // after the cell layout. This eliminates the one-frame double image.

@@ -17,6 +17,10 @@ extern "C" {
 // The log lives at /var/mobile/Library/Logs/FolderX/fx-diag.log and is capped.
 BOOL FXDiagEnabled(void);
 
+// Compile-time read-only mode: report only, never touch the view tree,
+// private rendering setters, or the icon model.
+BOOL FXObserveOnly(void);
+
 void FXDiagInstall(void);                     // writes the header line once
 void FXDiagLog(NSString *fmt, ...) NS_FORMAT_FUNCTION(1, 2);
 void FXDiagEvent(NSString *event, NSDictionary *info);

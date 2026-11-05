@@ -484,6 +484,11 @@ BOOL FXChangeSize(id icon, FXFolderSize target, BOOL persist) {
                   (unsigned long)target);
         return NO;
     }
+    if (FXObserveOnly()) {
+        FXDiagLog(@"observe.size target=%lu capacity=%lu -> would apply, not applied",
+                  (unsigned long)target, (unsigned long)FXPageCellCapacity(list));
+        return NO;
+    }
     NSArray<NSString *> *beforeInventory = FXRootInventory();
     NSUInteger beforeCount = FXRootItemCount();
     // An identifier-only failure is no longer an unconditional refusal. We

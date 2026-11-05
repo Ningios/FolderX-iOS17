@@ -1,4 +1,5 @@
 #import "FXInterface.h"
+#import "FXDiag.h"
 #import <dispatch/dispatch.h>
 #import <objc/runtime.h>
 #import <math.h>
@@ -378,6 +379,11 @@ static id FXLiveRootApp(NSString *uid, NSString *bundleID) {
 
 static BOOL FXReconcileAfterNativeDrop(id source, id folder, NSString *uid,
                                        NSString *bundleID, NSUInteger generation) {
+    if (FXObserveOnly()) {
+        FXDiagLog(@"observe.drop folder=%d (no native handoff attempted)",
+                  (int)FXIsFolder(folder));
+        return NO;
+    }
     if (generation != FXDragGeneration ||
         FXNativeHandoffSubmittedGeneration == generation) return NO;
     // Rebind both ends after SpringBoard's native placeholder/layout mutation.

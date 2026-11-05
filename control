@@ -1,9 +1,9 @@
 Package: com.huhansibuxin.folderexpand
 Name: FolderX
-Version: 1.5.9~diag4
+Version: 1.5.10~observe1
 Architecture: iphoneos-arm64
 Depends: ellekit, firmware (>= 17.0), firmware (<< 18.0)
-Description: FolderX 1.5.9: diag2 code base (proven on this device) plus the page-capacity fix only.
+Description: FolderX 1.5.10 observe-only build: installs no views, calls no private rendering setters, mutates no icon model. Diagnostics only.
 Maintainer: Ning&半生年华
 Author: Ning&半生年华
 Section: Tweaks

@@ -25,6 +25,14 @@ static dispatch_queue_t FXDiagQueue(void) {
     return queue;
 }
 
+BOOL FXObserveOnly(void) {
+#ifdef FX_OBSERVE_ONLY
+    return YES;
+#else
+    return NO;
+#endif
+}
+
 BOOL FXDiagEnabled(void) {
     static BOOL cached = NO;
     static CFTimeInterval cachedAt = 0;
@@ -191,9 +199,10 @@ void FXDiagInstall(void) {
         UIDevice *device = UIDevice.currentDevice;
         NSDictionary *info = NSBundle.mainBundle.infoDictionary;
         NSString *line = [NSString stringWithFormat:
-            @"==== FolderX diag start %@ | iOS %@ (%@) | %@ %@ | main=%@ ====",
+            @"==== FolderX diag start %@ | iOS %@ (%@) | %@ %@ | main=%@ | mode=%@ ====",
             [NSDate date], device.systemVersion, [info objectForKey:@"CFBundleVersion"],
-            device.model, device.systemName, NSBundle.mainBundle.bundleIdentifier];
+            device.model, device.systemName, NSBundle.mainBundle.bundleIdentifier,
+            FXObserveOnly() ? @"observe-only" : @"active"];
         @try { [handle writeData:[[line stringByAppendingString:@"\n"]
                                  dataUsingEncoding:NSUTF8StringEncoding]]; }
         @catch (__unused NSException *ex) { }
