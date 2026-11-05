@@ -1,9 +1,9 @@
 Package: com.huhansibuxin.folderexpand
 Name: FolderX
-Version: 1.5.10~observe1
+Version: 1.5.11~diag5
 Architecture: iphoneos-arm64
 Depends: ellekit, firmware (>= 17.0), firmware (<< 18.0)
-Description: FolderX 1.5.10 observe-only build: installs no views, calls no private rendering setters, mutates no icon model. Diagnostics only.
+Description: FolderX 1.5.11: app launch moved to the main thread (removes the multi-second delay) + probes for the native folder grid image that causes the double icon.
 Maintainer: Ning&半生年华
 Author: Ning&半生年华
 Section: Tweaks

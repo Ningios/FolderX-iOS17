@@ -17,6 +17,15 @@ extern "C" {
 // The log lives at /var/mobile/Library/Logs/FolderX/fx-diag.log and is capped.
 BOOL FXDiagEnabled(void);
 
+// Dumps method names of a class (and its superclasses) that match any keyword.
+void FXDiagClassMethods(NSString *className, NSArray<NSString *> *keywords);
+
+// Dumps the view subtree (class / frame / alpha / hidden), only when it changes.
+void FXDiagViewTree(UIView *root, NSString *key);
+
+// Class method list matching grid/image keywords, once per class.
+void FXDiagDumpGridMethods(NSString *className);
+
 // Compile-time read-only mode: report only, never touch the view tree,
 // private rendering setters, or the icon model.
 BOOL FXObserveOnly(void);

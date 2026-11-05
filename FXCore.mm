@@ -642,41 +642,80 @@ UIImage *FXAppImage(NSString *bundleID) {
     return image;
 }
 
+// Launch the tapped app WITHOUT opening its containing folder.
+// 1.5.11: the workspace fallback used to hop onto a background queue, which on
+// iOS 17.2.1 added a visible delay before the app appeared. SpringBoard calls
+// the same API from the main thread, so do that here too, and confirm shortly
+// afterwards that something actually reached the front.
+static BOOL FXAppIsFrontmost(NSString *bundleID) {
+    Class controllerClass = NSClassFromString(@"SBApplicationController");
+    id shared = FXObject((id)controllerClass, @"sharedInstance");
+    SEL lookup = NSSelectorFromString(@"applicationWithBundleIdentifier:");
+    if (!shared || ![shared respondsToSelector:lookup]) return YES; // unknown: assume success
+    id (*find)(id, SEL, id) = (id (*)(id, SEL, id))objc_msgSend;
+    id application = nil;
+    @try { application = find(shared, lookup, bundleID); }
+    @catch (__unused NSException *exception) { return YES; }
+    if (!application) return NO;
+    for (NSString *name in @[@"isFrontmostDisplayed", @"isFrontmostApp",
+                             @"isFrontmost", @"isActive"]) {
+        SEL sel = NSSelectorFromString(name);
+        if (![application respondsToSelector:sel]) continue;
+        BOOL (*read)(id, SEL) = (BOOL (*)(id, SEL))objc_msgSend;
+        @try { return read(application, sel); }
+        @catch (__unused NSException *exception) { return YES; }
+    }
+    return YES;
+}
+
+static void FXLaunchViaWorkspace(NSString *bundleID, CFTimeInterval started, NSString *reason) {
+    void (^body)(void) = ^{
+        Class workspaceClass = NSClassFromString(@"LSApplicationWorkspace");
+        id workspace = FXObject((id)workspaceClass, @"defaultWorkspace");
+        SEL launch = NSSelectorFromString(@"openApplicationWithBundleID:");
+        if (![workspace respondsToSelector:launch]) {
+            FXDiagLog(@"launch.workspace unavailable selectors");
+            return;
+        }
+        @try {
+            BOOL (*call)(id, SEL, id) = (BOOL (*)(id, SEL, id))objc_msgSend;
+            (void)call(workspace, launch, bundleID);
+            FXDiagLog(@"launch.workspace reason=%@ after=%.3fs main=%d", reason,
+                      CACurrentMediaTime() - started, (int)[NSThread isMainThread]);
+        } @catch (__unused NSException *exception) { }
+    };
+    if ([NSThread isMainThread]) body();
+    else dispatch_async(dispatch_get_main_queue(), body);
+}
+
 void FXLaunchApp(id leafIcon) {
     NSString *bundleID = [FXBundleID(leafIcon) copy];
     if (!bundleID.length) return;
-    // FolderExpand 0.3.3's successful direct-tap path: SpringBoard owns the
-    // app icon and can launch it without opening the containing folder. The
-    // location is an OBJECT (NSNumber), never a raw 1 integer pointer.
+    CFTimeInterval started = CACurrentMediaTime();
+    // 1) Native SBIcon launch: real animation path, no extra hop.
     SEL nativeLaunch = NSSelectorFromString(@"launchFromLocation:context:");
     if ([leafIcon respondsToSelector:nativeLaunch]) {
         NSMethodSignature *sig = [leafIcon methodSignatureForSelector:nativeLaunch];
-        if (sig && sig.numberOfArguments == 4 &&
-            sig.methodReturnType[0] == 'v' &&
+        if (sig && sig.numberOfArguments == 4 && sig.methodReturnType[0] == 'v' &&
             [sig getArgumentTypeAtIndex:2][0] == '@' &&
             [sig getArgumentTypeAtIndex:3][0] == '@') {
             @try {
                 void (*call)(id, SEL, id, id) = (void (*)(id, SEL, id, id))objc_msgSend;
                 call(leafIcon, nativeLaunch, @(1), nil);
+                FXDiagLog(@"launch.native elapsed=%.3fs", CACurrentMediaTime() - started);
+                // This selector can return without launching anything on some
+                // builds, so verify before declaring success.
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)),
+                               dispatch_get_main_queue(), ^{
+                    if (!FXAppIsFrontmost(bundleID))
+                        FXLaunchViaWorkspace(bundleID, started, @"verify");
+                });
                 return;
             } @catch (__unused NSException *exception) { }
         }
     }
-    // Fall back only when native SBIcon dispatch is absent or throws. Keep the
-    // potentially synchronous LaunchServices API OFF the SpringBoard UI thread.
-    // SpringBoard iOS 17.1.1 device observations showed LSApplicationWorkspace
-    // working where older SBIcon launch selectors rejected mismatched args.
-    // Do not synchronously block the SpringBoard main thread.
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        Class workspaceClass = NSClassFromString(@"LSApplicationWorkspace");
-        id workspace = FXObject((id)workspaceClass, @"defaultWorkspace");
-        SEL launch = NSSelectorFromString(@"openApplicationWithBundleID:");
-        if (![workspace respondsToSelector:launch]) return;
-        @try {
-            BOOL (*call)(id, SEL, id) = (BOOL (*)(id, SEL, id))objc_msgSend;
-            (void)call(workspace, launch, bundleID);
-        } @catch (__unused NSException *exception) { }
-    });
+    // 2) Workspace launch, on the main thread.
+    FXLaunchViaWorkspace(bundleID, started, @"direct");
 }
 
 void FXRememberEditingForView(UIView *host, BOOL editing) {

@@ -1,6 +1,7 @@
 #import "FXDiag.h"
 #import <objc/runtime.h>
 #import <QuartzCore/QuartzCore.h>
+#import <stdlib.h>
 
 // Opt-in diagnostic channel. Everything here is read-only observation: it
 // never mutates SpringBoard state, only records which branch the existing
@@ -207,4 +208,61 @@ void FXDiagInstall(void) {
                                  dataUsingEncoding:NSUTF8StringEncoding]]; }
         @catch (__unused NSException *ex) { }
     });
+}
+void FXDiagClassMethods(NSString *className, NSArray<NSString *> *keywords) {
+    if (!FXDiagEnabled() || !className.length) return;
+    Class cls = NSClassFromString(className);
+    if (!cls) { FXDiagLog(@"METHODS %@ absent", className); return; }
+    NSMutableArray<NSString *> *hits = [NSMutableArray array];
+    NSUInteger total = 0;
+    for (Class cursor = cls, NSUInteger level = 0; cursor && level < 4;
+         cursor = class_getSuperclass(cursor), level++) {
+        unsigned int count = 0;
+        Method *methods = class_copyMethodList(cursor, &count);
+        total += count;
+        for (unsigned int i = 0; methods && i < count; i++) {
+            NSString *name = NSStringFromSelector(method_getName(methods[i]));
+            for (NSString *keyword in keywords) {
+                if ([name rangeOfString:keyword options:NSCaseInsensitiveSearch].location == NSNotFound)
+                    continue;
+                const char *types = method_getTypeEncoding(methods[i]);
+                [hits addObject:[NSString stringWithFormat:@"%@.%@(%s)",
+                                 NSStringFromClass(cursor), name, types ? types : "?"]];
+                break;
+            }
+        }
+        if (methods) free(methods);
+    }
+    FXDiagLog(@"METHODS %@ total=%lu hits=%lu", className, (unsigned long)total,
+              (unsigned long)hits.count);
+    for (NSString *hit in hits) FXDiagLog(@"METHODS   %@", hit);
+}
+
+static void FXDiagAppendTree(UIView *view, NSUInteger depth, NSUInteger maxDepth,
+                             NSMutableString *out) {
+    if (!view || depth > maxDepth) return;
+    if (out.length) [out appendString:@" | "];
+    [out appendFormat:@"%@[%.0f,%.0f %.0fx%.0f a=%.2f%@]",
+     NSStringFromClass(view.class), view.frame.origin.x, view.frame.origin.y,
+     view.frame.size.width, view.frame.size.height, view.alpha,
+     view.hidden ? @" H" : @""];
+    for (UIView *child in view.subviews)
+        FXDiagAppendTree(child, depth + 1, maxDepth, out);
+}
+
+void FXDiagViewTree(UIView *root, NSString *key) {
+    if (!FXDiagEnabled() || !root || !key.length) return;
+    NSMutableString *out = [NSMutableString string];
+    FXDiagAppendTree(root, 0, 2, out);
+    FXDiagChanged(key, out);
+}
+
+void FXDiagDumpGridMethods(NSString *className) {
+    if (!FXDiagEnabled() || !className.length) return;
+    static NSMutableSet<NSString *> *dumped = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ dumped = [NSMutableSet set]; });
+    if ([dumped containsObject:className]) return;
+    [dumped addObject:className];
+    FXDiagClassMethods(className, @[@"Grid", @"gridImage", @"ImageUpdate"]);
 }

@@ -766,6 +766,7 @@ void FXRefreshIconView(UIView *host) {
     [FXKnownFolderHosts addObject:host];
     UIView *nativeImage = FXNativeImageView(host);
     FXDiagProbeImageView(nativeImage);
+    if (nativeImage) FXDiagDumpGridMethods(NSStringFromClass(nativeImage.class));
     CGFloat width = host.bounds.size.width;
     CGFloat height = host.bounds.size.height;
     CGFloat side = floor(MIN(width, height > 14 ? height - 14 : height));
@@ -891,6 +892,7 @@ void FXRefreshIconView(UIView *host) {
             [overlay layoutIfNeeded];
         }
         overlay.hidden = NO;
+        FXDiagViewTree(nativeImage, [NSString stringWithFormat:@"tree/%p", nativeImage]);
         // Do not make the native tap recognizer depend on an overlay tap.
         // That dependency intercepted long presses and sometimes opened the
         // folder underneath a direct launch.
