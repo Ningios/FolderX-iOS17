@@ -2,7 +2,6 @@
 #import "FXDiag.h"
 #import <dispatch/dispatch.h>
 
-static char kFXDiagKey;
 
 // Folder opening/closing is a UIViewController lifecycle, not a fixed timer.
 // Maintain native ownership THROUGH the close transition of the opened icon,
