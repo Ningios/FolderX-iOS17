@@ -5,6 +5,7 @@
 
 void FXRefreshIconView(UIView *host);
 void FXRefreshNativeImageView(UIView *imageView);
+void FXNeutralizeNativeGridAfterUpdate(UIView *imageView);
 BOOL FXHandleFolderTap(UIView *host, id gesture);
 BOOL FXSuppressNativeFolderAction(UIView *host);
 void FXSetDropHoverForHost(UIView *host, BOOL hovered);

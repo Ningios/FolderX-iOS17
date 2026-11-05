@@ -75,4 +75,11 @@
     FXRefreshNativeImageView((UIView *)self);
 }
 
+// SpringBoard installs a page mini grid here. Re-assert our ownership in the
+// same call so no frame shows the native grid next to our own.
+- (void)fulfillGridImageForPageElement:(id)element {
+    %orig;
+    FXNeutralizeNativeGridAfterUpdate((UIView *)self);
+}
+
 %end

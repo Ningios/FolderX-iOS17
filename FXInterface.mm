@@ -499,6 +499,25 @@ static void FXSetNativeThumbnailVisibility(UIView *imageView, BOOL hide) {
         }
     }
 
+    // The 1.5.11 view-tree dump identified the leftover native mini grid as
+    // _SBIconGridWrapperView inside SBFolderIconImageView. Alpha alone leaves a
+    // window when SpringBoard repopulates it; keep the page-grid flag in the
+    // same state so a repaint cannot reveal it.
+    SEL pageHiddenSel = NSSelectorFromString(@"setPageGridHidden:");
+    if ([imageView respondsToSelector:pageHiddenSel]) {
+        NSMethodSignature *pageSig = [imageView methodSignatureForSelector:pageHiddenSel];
+        if (pageSig && pageSig.numberOfArguments == 3 &&
+            strcmp([pageSig getArgumentTypeAtIndex:2], @encode(BOOL)) == 0) {
+            FXDiagChanged([NSString stringWithFormat:@"pageHidden/%@",
+                           NSStringFromClass(imageView.class)],
+                          [NSString stringWithFormat:@"hide=%d", hide]);
+            @try {
+                void (*setPage)(id, SEL, BOOL) = (void (*)(id, SEL, BOOL))objc_msgSend;
+                setPage(imageView, pageHiddenSel, hide);
+            } @catch (__unused NSException *ex) { }
+        }
+    }
+
     id value = FXPageGridContainer(imageView, 0);
     UIView *page = [value isKindOfClass:UIView.class] ? (UIView *)value : nil;
     FXDiagChanged([NSString stringWithFormat:@"page/%@", NSStringFromClass(imageView.class)],
@@ -1022,6 +1041,26 @@ void FXSetNativeFolderPresentationActive(BOOL active) {
             [host setNeedsLayout];
         }
     }
+}
+
+// Logos hooks -fulfillGridImageForPageElement: and forwards here. That method is
+// the point where SpringBoard installs a page's mini grid; re-asserting inside
+// the same call removes the frame where the native grid and ours are both alive.
+void FXNeutralizeNativeGridAfterUpdate(UIView *imageView) {
+    if (FXObserveOnly() || !imageView) return;
+    UIView *host = FXHostForNativeImage(imageView);
+    FXMiniGrid *overlay = objc_getAssociatedObject(host, &kFXOverlayKey);
+    if (!overlay || overlay.hidden || !overlay.superview) return; // not our folder
+    static char kFXNeutralizeDepth;
+    NSNumber *depth = objc_getAssociatedObject(imageView, &kFXNeutralizeDepth);
+    if (depth.integerValue > 1) return; // never recurse into our own suppression
+    objc_setAssociatedObject(imageView, &kFXNeutralizeDepth, @(depth.integerValue + 1),
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    FXDiagThrottled([NSString stringWithFormat:@"neut/%p", imageView], 0.2,
+                    @"grid.neutralize %@", NSStringFromClass(imageView.class));
+    FXSetNativeThumbnailVisibility(imageView, YES);
+    objc_setAssociatedObject(imageView, &kFXNeutralizeDepth, nil,
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
 void FXRefreshNativeImageView(UIView *imageView) {

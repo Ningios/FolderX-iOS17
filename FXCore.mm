@@ -647,6 +647,19 @@ UIImage *FXAppImage(NSString *bundleID) {
 // iOS 17.2.1 added a visible delay before the app appeared. SpringBoard calls
 // the same API from the main thread, so do that here too, and confirm shortly
 // afterwards that something actually reached the front.
+// Never call the workspace from the main thread: on iOS 17.2.1 it blocks until
+// the main thread answers, which deadlocks for ~10s (measured). Use a dedicated
+// high-priority serial queue instead.
+static dispatch_queue_t FXLaunchQueue(void) {
+    static dispatch_queue_t queue;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        queue = dispatch_queue_create("com.folderx.launch", DISPATCH_QUEUE_SERIAL);
+        dispatch_set_target_queue(queue, dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0));
+    });
+    return queue;
+}
+
 static BOOL FXAppIsFrontmost(NSString *bundleID) {
     Class controllerClass = NSClassFromString(@"SBApplicationController");
     id shared = FXObject((id)controllerClass, @"sharedInstance");
@@ -684,8 +697,10 @@ static void FXLaunchViaWorkspace(NSString *bundleID, CFTimeInterval started, NSS
                       CACurrentMediaTime() - started, (int)[NSThread isMainThread]);
         } @catch (__unused NSException *exception) { }
     };
-    if ([NSThread isMainThread]) body();
-    else dispatch_async(dispatch_get_main_queue(), body);
+    dispatch_async(FXLaunchQueue(), ^{
+        if ([NSThread isMainThread]) { FXDiagLog(@"launch.workspace main-thread!"); return; }
+        body();
+    });
 }
 
 void FXLaunchApp(id leafIcon) {
@@ -694,6 +709,9 @@ void FXLaunchApp(id leafIcon) {
     CFTimeInterval started = CACurrentMediaTime();
     // 1) Native SBIcon launch: real animation path, no extra hop.
     SEL nativeLaunch = NSSelectorFromString(@"launchFromLocation:context:");
+    if (![leafIcon respondsToSelector:nativeLaunch])
+        FXDiagLog(@"launch.native unavailable sel=%d icon=%@", 0,
+                  NSStringFromClass([leafIcon class]));
     if ([leafIcon respondsToSelector:nativeLaunch]) {
         NSMethodSignature *sig = [leafIcon methodSignatureForSelector:nativeLaunch];
         if (sig && sig.numberOfArguments == 4 && sig.methodReturnType[0] == 'v' &&
@@ -702,19 +720,18 @@ void FXLaunchApp(id leafIcon) {
             @try {
                 void (*call)(id, SEL, id, id) = (void (*)(id, SEL, id, id))objc_msgSend;
                 call(leafIcon, nativeLaunch, @(1), nil);
-                FXDiagLog(@"launch.native elapsed=%.3fs", CACurrentMediaTime() - started);
-                // This selector can return without launching anything on some
-                // builds, so verify before declaring success.
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)),
-                               dispatch_get_main_queue(), ^{
-                    if (!FXAppIsFrontmost(bundleID))
-                        FXLaunchViaWorkspace(bundleID, started, @"verify");
-                });
+                FXDiagLog(@"launch.native elapsed=%.3fs frontmost=%d",
+                          CACurrentMediaTime() - started, (int)FXAppIsFrontmost(bundleID));
                 return;
-            } @catch (__unused NSException *exception) { }
+            } @catch (__unused NSException *exception) {
+                FXDiagLog(@"launch.native threw, falling back");
+            }
+        } else if (sig) {
+            FXDiagLog(@"launch.native rejected sig args=%lu ret=%s",
+                      (unsigned long)sig.numberOfArguments, sig.methodReturnType);
         }
     }
-    // 2) Workspace launch, on the main thread.
+    // 2) Workspace launch, off the main thread.
     FXLaunchViaWorkspace(bundleID, started, @"direct");
 }
 
