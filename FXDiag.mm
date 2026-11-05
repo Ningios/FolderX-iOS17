@@ -215,7 +215,8 @@ void FXDiagClassMethods(NSString *className, NSArray<NSString *> *keywords) {
     if (!cls) { FXDiagLog(@"METHODS %@ absent", className); return; }
     NSMutableArray<NSString *> *hits = [NSMutableArray array];
     NSUInteger total = 0;
-    for (Class cursor = cls, NSUInteger level = 0; cursor && level < 4;
+    NSUInteger level = 0;
+    for (Class cursor = cls; cursor && level < 4;
          cursor = class_getSuperclass(cursor), level++) {
         unsigned int count = 0;
         Method *methods = class_copyMethodList(cursor, &count);
