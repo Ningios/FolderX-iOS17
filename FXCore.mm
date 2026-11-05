@@ -681,6 +681,29 @@ static BOOL FXAppIsFrontmost(NSString *bundleID) {
     return YES;
 }
 
+// Private but synchronous-fast entry; must be called on the main thread.
+static BOOL FXLaunchViaUIApplication(NSString *bundleID, CFTimeInterval started) {
+    Class applicationClass = NSClassFromString(@"UIApplication");
+    id shared = FXObject((id)applicationClass, @"sharedApplication");
+    SEL sel = NSSelectorFromString(@"launchApplicationWithIdentifier:suspended:");
+    if (!shared || ![shared respondsToSelector:sel]) return NO;
+    NSMethodSignature *sig = [shared methodSignatureForSelector:sel];
+    if (!sig || sig.numberOfArguments != 4 || sig.methodReturnType[0] != 'v' ||
+        strcmp([sig getArgumentTypeAtIndex:3], @encode(BOOL)) != 0) {
+        FXDiagLog(@"launch.uiapp sig mismatch");
+        return NO;
+    }
+    @try {
+        void (*call)(id, SEL, id, BOOL) = (void (*)(id, SEL, id, BOOL))objc_msgSend;
+        call(shared, sel, bundleID, NO);
+        FXDiagLog(@"launch.uiapp after=%.3fs", CACurrentMediaTime() - started);
+        return YES;
+    } @catch (NSException *exception) {
+        FXDiagLog(@"launch.uiapp threw %@: %@", exception.name, exception.reason);
+        return NO;
+    }
+}
+
 static void FXLaunchViaWorkspace(NSString *bundleID, CFTimeInterval started, NSString *reason) {
     void (^body)(void) = ^{
         Class workspaceClass = NSClassFromString(@"LSApplicationWorkspace");
@@ -723,15 +746,19 @@ void FXLaunchApp(id leafIcon) {
                 FXDiagLog(@"launch.native elapsed=%.3fs frontmost=%d",
                           CACurrentMediaTime() - started, (int)FXAppIsFrontmost(bundleID));
                 return;
-            } @catch (__unused NSException *exception) {
-                FXDiagLog(@"launch.native threw, falling back");
+            } @catch (NSException *exception) {
+                FXDiagLog(@"launch.native threw %@: %@", exception.name, exception.reason);
+                FXDiagClassMethods(NSStringFromClass([leafIcon class]),
+                                   @[@"launch", @"Launch", @"activate", @"open"]);
             }
         } else if (sig) {
             FXDiagLog(@"launch.native rejected sig args=%lu ret=%s",
                       (unsigned long)sig.numberOfArguments, sig.methodReturnType);
         }
     }
-    // 2) Workspace launch, off the main thread.
+    // 2) Private UIApplication entry, main thread.
+    if (FXLaunchViaUIApplication(bundleID, started)) return;
+    // 3) Workspace launch, off the main thread.
     FXLaunchViaWorkspace(bundleID, started, @"direct");
 }
 

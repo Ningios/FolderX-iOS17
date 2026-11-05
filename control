@@ -1,9 +1,9 @@
 Package: com.huhansibuxin.folderexpand
 Name: FolderX
-Version: 1.5.12
+Version: 1.5.13
 Architecture: iphoneos-arm64
 Depends: ellekit, firmware (>= 17.0), firmware (<< 18.0)
-Description: FolderX 1.5.12: launch goes back to a background queue (the main-thread call blocked SpringBoard for 10s) and the native page grid is re-suppressed inside fulfillGridImageForPageElement: (fixes the duplicate icon).
+Description: FolderX 1.5.13: log why the native launch throws and dump every launch entry point; try the private UIApplication path before the workspace fallback.
 Maintainer: Ning&半生年华
 Author: Ning&半生年华
 Section: Tweaks
