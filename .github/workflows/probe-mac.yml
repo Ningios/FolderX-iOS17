@@ -1,8 +1,0 @@
-name: probe-mac
-on:
-  workflow_dispatch:
-jobs:
-  probe:
-    runs-on: macos-latest
-    steps:
-      - run: echo "macos runner alive"; sw_vers
