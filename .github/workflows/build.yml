@@ -7,34 +7,28 @@ on:
 
 jobs:
   build:
-    # macOS minutes are exhausted on this account; Linux bills at 1x.
-    # install-theos hard-codes "libxml2", which has no candidate on ubuntu-24.04,
-    # so the toolchain and SDK are installed explicitly instead.
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
+    runs-on: macos-14
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
-      - name: Dependencies
+      - name: Install toolchain
         run: |
           set -e
-          sudo apt-get update
-          sudo apt-get install -y build-essential fakeroot rsync curl xz-utils perl zip git \
-                                  libxml2-utils libtinfo6 file
-
-      - name: Theos + toolchain + SDK
-        run: |
-          set -e
-          git clone --recursive --depth 1 https://github.com/roothide/theos.git "$HOME/theos"
-          export THEOS="$HOME/theos"
+          brew install ldid xz || true
+          git clone --recursive --depth 1 -q https://github.com/roothide/theos.git "$HOME/theos"
           echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
-          echo "$HOME/theos/bin" >> "$GITHUB_PATH"
-          mkdir -p "$THEOS/toolchain"
-          curl -sL https://github.com/L1ghtmann/llvm-project/releases/latest/download/iOSToolchain-x86_64.tar.xz \
-            | tar -xJ - -C "$THEOS/toolchain/"
-          bash "$THEOS/bin/install-sdk" latest || bash "$THEOS/bin/install-sdk" 17.0
-          ls "$THEOS/toolchain/linux/iphone/bin" | head
-          ls "$THEOS/sdks"
+          echo "PATH=$HOME/theos/bin:$PATH" >> "$GITHUB_ENV"
+
+      - name: Provide iOS SDK from Xcode
+        run: |
+          set -e
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          VER=$(xcrun --sdk iphoneos --show-sdk-version)
+          echo "SDK=$SDK ($VER)"
+          mkdir -p "$HOME/theos/sdks"
+          ln -sfn "$SDK" "$HOME/theos/sdks/iPhoneOS${VER}.sdk"
+          ls -la "$HOME/theos/sdks"
 
       - name: Build package
         run: |
@@ -48,7 +42,7 @@ jobs:
           for f in packages/*.deb; do
             [ -e "$f" ] || { echo "NO DEB PRODUCED"; exit 1; }
             echo "--- $f"
-            echo "SIZE=$(wc -c < "$f") SHA256=$(sha256sum "$f" | cut -d' ' -f1)"
+            echo "SIZE=$(wc -c < "$f") SHA256=$(shasum -a 256 "$f" | cut -d' ' -f1)"
             ar t "$f"
           done
 
