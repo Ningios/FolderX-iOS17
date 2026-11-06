@@ -1,9 +1,9 @@
 Package: com.huhansibuxin.folderexpand
 Name: FolderX
-Version: 1.5.13
+Version: 1.5.14
 Architecture: iphoneos-arm64
 Depends: ellekit, firmware (>= 17.0), firmware (<< 18.0)
-Description: FolderX 1.5.13: log why the native launch throws and dump every launch entry point; try the private UIApplication path before the workspace fallback.
+Description: FolderX 1.5.14: hard-hide the native mini grid (hidden instead of alpha) so the open/close transition cannot show two grids.
 Maintainer: Ning&半生年华
 Author: Ning&半生年华
 Section: Tweaks

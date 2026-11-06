@@ -422,6 +422,26 @@ static BOOL FXReadNativeGridAlpha(id owner, CGFloat *alpha) {
     return NO;
 }
 
+// SpringBoard rebuilds the native mini grid inside _SBIconGridWrapperView and
+// rewrites its alpha during open/close transitions. Alpha therefore leaves a
+// window where the native grid and our FXMiniGrid are both drawn. Hidden is not
+// animated by that path, so use it as the authoritative switch.
+static NSUInteger FXSetNativeGridWrappersHidden(UIView *root, BOOL hide, NSUInteger depth) {
+    if (!root || depth > 3) return 0;
+    NSUInteger changed = 0;
+    for (UIView *child in root.subviews) {
+        if ([NSStringFromClass(child.class) isEqualToString:@"_SBIconGridWrapperView"]) {
+            if (child.hidden != hide) {
+                child.hidden = hide;
+                changed++;
+            }
+            continue; // do not descend into a wrapper we just controlled
+        }
+        changed += FXSetNativeGridWrappersHidden(child, hide, depth + 1);
+    }
+    return changed;
+}
+
 static void FXSetNativeThumbnailVisibility(UIView *imageView, BOOL hide) {
     if (!imageView) return;
     BOOL touched = [objc_getAssociatedObject(imageView, &kFXNativeTouchedKey) boolValue];
@@ -498,6 +518,11 @@ static void FXSetNativeThumbnailVisibility(UIView *imageView, BOOL hide) {
             }
         }
     }
+
+    NSUInteger hiddenWrappers = FXSetNativeGridWrappersHidden(imageView, hide, 0);
+    FXDiagChanged([NSString stringWithFormat:@"wrappers/%@", NSStringFromClass(imageView.class)],
+                  [NSString stringWithFormat:@"hide=%d changed=%lu",
+                   hide, (unsigned long)hiddenWrappers]);
 
     // The 1.5.11 view-tree dump identified the leftover native mini grid as
     // _SBIconGridWrapperView inside SBFolderIconImageView. Alpha alone leaves a
