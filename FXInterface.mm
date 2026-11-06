@@ -306,7 +306,7 @@ static void FXMarkHandled(UIView *host, id app) {
 - (void)onPan:(UIPanGestureRecognizer *)pan {
     if (pan.state == UIGestureRecognizerStateBegan) {
         self.resizing = FXIsEditing(self.host) && self.host.window && !FXNativeDragIsActive();
-        self.startSize = FXSize(FXObject(self.host, @"icon"));
+        self.startSize = (FXFolderSize)FXSize(FXObject(self.host, @"icon"));
         self.passedThreshold = NO;
         FXDiagLog(@"pan.begin resizing=%d editing=%d window=%d start=%lu icon=%@",
                   self.resizing, (int)FXIsEditing(self.host), (int)(self.host.window != nil),
