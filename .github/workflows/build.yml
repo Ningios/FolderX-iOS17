@@ -21,7 +21,7 @@ jobs:
           export THEOS="$HOME/theos"
           echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
           echo "$HOME/theos/bin" >> "$GITHUB_PATH"
-          "$HOME/theos/bin/install-theos"
+          bash "$HOME/theos/bin/install-theos"
 
       - name: Show environment
         run: |
