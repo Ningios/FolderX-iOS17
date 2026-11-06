@@ -7,26 +7,33 @@ on:
 
 jobs:
   build:
-    # macOS minutes are exhausted on this account (jobs are cancelled within
-    # seconds); Linux runners bill at 1x and are still available.
+    # macOS minutes are exhausted on this account; Linux bills at 1x.
+    # install-theos hard-codes "libxml2", which has no candidate on ubuntu-24.04,
+    # so the toolchain and SDK are installed explicitly instead.
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Theos (Linux)
+      - name: Dependencies
+        run: |
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y build-essential fakeroot rsync curl xz-utils perl zip git \
+                                  libxml2-utils libtinfo6 file
+
+      - name: Theos + toolchain + SDK
         run: |
           set -e
           git clone --recursive --depth 1 https://github.com/roothide/theos.git "$HOME/theos"
           export THEOS="$HOME/theos"
           echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
           echo "$HOME/theos/bin" >> "$GITHUB_PATH"
-          bash "$HOME/theos/bin/install-theos"
-
-      - name: Show environment
-        run: |
-          set -e
-          "$THEOS/toolchain/linux/iphone/bin/clang" --version | head -2
+          mkdir -p "$THEOS/toolchain"
+          curl -sL https://github.com/L1ghtmann/llvm-project/releases/latest/download/iOSToolchain-x86_64.tar.xz \
+            | tar -xJ - -C "$THEOS/toolchain/"
+          bash "$THEOS/bin/install-sdk" latest || bash "$THEOS/bin/install-sdk" 17.0
+          ls "$THEOS/toolchain/linux/iphone/bin" | head
           ls "$THEOS/sdks"
 
       - name: Build package
@@ -37,7 +44,7 @@ jobs:
       - name: Inspect result
         run: |
           set -e
-          ls -la packages/
+          ls -la packages/ || true
           for f in packages/*.deb; do
             [ -e "$f" ] || { echo "NO DEB PRODUCED"; exit 1; }
             echo "--- $f"
