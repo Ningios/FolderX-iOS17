@@ -82,9 +82,4 @@
     FXNeutralizeNativeGridAfterUpdate((UIView *)self);
 }
 
-// Plan 3x3: SpringBoard still draws the grid, but with our row/column count.
-- (CGSize)_interiorGridSize {
-    return FXInteriorGridSizeForImageView((UIView *)self, %orig);
-}
-
 %end

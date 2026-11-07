@@ -1,9 +1,9 @@
 Package: com.huhansibuxin.folderexpand
 Name: FolderX
-Version: 1.6.1
+Version: 1.5.16
 Architecture: iphoneos-arm64
 Depends: ellekit, firmware (>= 17.0), firmware (<< 18.0)
-Description: FolderX 1.6.1 plan 3x3: SpringBoard draws the folder grid with a forced 3x3 (6x2 when wide) layout, so the enlarged folder shows nine large icons and no second grid.
+Description: FolderX 1.5.16: back to the self-rendered grid (sticky ownership). Native-grid experiments (1.6.x) reverted.
 Maintainer: Ning&半生年华
 Author: Ning&半生年华
 Section: Tweaks
