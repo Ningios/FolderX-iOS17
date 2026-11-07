@@ -805,6 +805,24 @@ static NSUInteger FXPreviewColumns(id icon, UIView *host) {
     return 3;
 }
 
+// ---- Plan 3x3: keep the native grid, but change its dimensions --------------
+// SpringBoard draws the folder grid itself; the only thing that was wrong is the
+// grid's row/column count (it still used the 1x1 layout). Returning 3x3 here makes
+// the system lay out nine slots across the enlarged frame.
+CGSize FXInteriorGridSizeForImageView(UIView *imageView, CGSize original) {
+    if (!imageView) return original;
+    UIView *host = FXHostForNativeImage(imageView);
+    id icon = host ? FXObject(host, @"icon") : nil;
+    if (!FXIsFolder(icon)) return original;
+    NSUInteger sizeClass = FXSize(icon);
+    FXDiagChanged([NSString stringWithFormat:@"interior/%p", imageView],
+                  [NSString stringWithFormat:@"size=%lu orig=%.0fx%.0f",
+                   (unsigned long)sizeClass, original.width, original.height]);
+    if (sizeClass == FXFolderSizeLarge) return CGSizeMake(3, 3);
+    if (sizeClass == FXFolderSizeWide) return CGSizeMake(6, 2);
+    return original;
+}
+
 // ---- Plan A: let SpringBoard draw the large folder itself -------------------
 // The interior grid never followed the icon's new size class because the resize
 // path only changes the model. Re-running the grid setup makes SpringBoard lay
@@ -845,6 +863,10 @@ static void FXActivateNativeGrid(UIView *host, UIView *imageView, NSUInteger siz
     [imageView setNeedsLayout];
     [host setNeedsLayout];
     FXDiagLog(@"nativegrid.setup size=%lu", (unsigned long)sizeClass);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        FXDiagViewTree(imageView, [NSString stringWithFormat:@"nat/%p", imageView]);
+    });
 }
 #endif
 
