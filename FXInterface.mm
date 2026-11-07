@@ -805,6 +805,49 @@ static NSUInteger FXPreviewColumns(id icon, UIView *host) {
     return 3;
 }
 
+// ---- Plan A: let SpringBoard draw the large folder itself -------------------
+// The interior grid never followed the icon's new size class because the resize
+// path only changes the model. Re-running the grid setup makes SpringBoard lay
+// out its own grid across the whole 170x170 frame, so there is exactly one grid.
+#ifdef FX_NATIVE_GRID_ONLY
+static void FXActivateNativeGrid(UIView *host, UIView *imageView, NSUInteger sizeClass) {
+    if (!imageView) return;
+    if (sizeClass != FXFolderSizeLarge && sizeClass != FXFolderSizeWide) return;
+    FXSetNativeGridWrappersHidden(imageView, NO, 0);
+    SEL alphaSel = NSSelectorFromString(@"setIconGridImageAlpha:");
+    if ([imageView respondsToSelector:alphaSel]) {
+        void (*setAlpha)(id, SEL, CGFloat) = (void (*)(id, SEL, CGFloat))objc_msgSend;
+        @try { setAlpha(imageView, alphaSel, 1.0); } @catch (__unused NSException *ex) { }
+    }
+    SEL pageSel = NSSelectorFromString(@"setPageGridHidden:");
+    if ([imageView respondsToSelector:pageSel]) {
+        void (*setPage)(id, SEL, BOOL) = (void (*)(id, SEL, BOOL))objc_msgSend;
+        @try { setPage(imageView, pageSel, NO); } @catch (__unused NSException *ex) { }
+    }
+    static NSMutableSet<NSString *> *configured = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ configured = [NSMutableSet set]; });
+    NSString *uid = FXIdentifier(FXObject(host, @"icon")) ?: @"?";
+    NSString *key = [NSString stringWithFormat:@"%@-%lu", uid, (unsigned long)sizeClass];
+    if ([configured containsObject:key]) return;
+    [configured addObject:key];
+    SEL setup = NSSelectorFromString(@"_setupGridViewsInDefaultConfiguration");
+    if ([imageView respondsToSelector:setup]) {
+        void (*call)(id, SEL) = (void (*)(id, SEL))objc_msgSend;
+        @try { call(imageView, setup); } @catch (__unused NSException *ex) { }
+    }
+    for (NSString *name in @[@"_showLeftMinigrid", @"_showRightMinigrid"]) {
+        SEL sel = NSSelectorFromString(name);
+        if (![imageView respondsToSelector:sel]) continue;
+        void (*call)(id, SEL) = (void (*)(id, SEL))objc_msgSend;
+        @try { call(imageView, sel); } @catch (__unused NSException *ex) { }
+    }
+    [imageView setNeedsLayout];
+    [host setNeedsLayout];
+    FXDiagLog(@"nativegrid.setup size=%lu", (unsigned long)sizeClass);
+}
+#endif
+
 void FXRefreshIconView(UIView *host) {
     if (!host || ![host isKindOfClass:UIView.class]) return;
     id icon = FXObject(host, @"icon");
@@ -900,6 +943,31 @@ void FXRefreshIconView(UIView *host) {
                    NSStringFromClass(FXObject(host, @"icon") ?
                                      [FXObject(host, @"icon") class] : [NSObject class])]);
     if (FXObserveOnly()) return; // observe mode installs and moves nothing
+#ifdef FX_NATIVE_GRID_ONLY
+    {
+        FXMiniGrid *mine = objc_getAssociatedObject(host, &kFXOverlayKey);
+        if (mine) mine.hidden = YES;
+        FXActivateNativeGrid(host, nativeImage, sizeClass);
+        BOOL editingNow = FXIsEditing(host);
+        if (editingNow && side > 30 && host.window) {
+            if (!handle) {
+                handle = [[FXCornerHandle alloc] initWithFrame:CGRectMake(0, 0, 48, 48)];
+                handle.host = host;
+                [host addSubview:handle];
+                objc_setAssociatedObject(host, &kFXHandleKey, handle,
+                                         OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            }
+            CGFloat hotSide = side < 90 ? 34.0 : 48.0;
+            CGRect frame = CGRectMake(round(MAX(0, width - hotSide)),
+                                      round(MAX(0, side - hotSide)), hotSide, hotSide);
+            if (!CGRectEqualToRect(handle.frame, frame)) handle.frame = frame;
+            handle.hidden = NO;
+        } else if (handle) {
+            handle.hidden = YES;
+        }
+        return;
+    }
+#endif
     // Atomic visual hand-off: hide the custom grid BEFORE revealing the
     // native thumbnail; on the opposite path hide native first, reveal ours
     // after the cell layout. This eliminates the one-frame double image.
@@ -1085,6 +1153,9 @@ void FXSetNativeFolderPresentationActive(BOOL active) {
 // the point where SpringBoard installs a page's mini grid; re-asserting inside
 // the same call removes the frame where the native grid and ours are both alive.
 void FXNeutralizeNativeGridAfterUpdate(UIView *imageView) {
+#ifdef FX_NATIVE_GRID_ONLY
+    return; // plan A renders the native grid on purpose
+#endif
     if (FXObserveOnly() || !imageView) return;
     UIView *host = FXHostForNativeImage(imageView);
     FXMiniGrid *overlay = objc_getAssociatedObject(host, &kFXOverlayKey);
@@ -1102,6 +1173,9 @@ void FXNeutralizeNativeGridAfterUpdate(UIView *imageView) {
 }
 
 void FXRefreshNativeImageView(UIView *imageView) {
+#ifdef FX_NATIVE_GRID_ONLY
+    return; // plan A renders the native grid on purpose
+#endif
     if (!imageView) return;
     UIView *view = imageView.superview;
     Class iconViewClass = NSClassFromString(@"SBIconView");

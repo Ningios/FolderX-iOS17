@@ -1,9 +1,9 @@
 Package: com.huhansibuxin.folderexpand
 Name: FolderX
-Version: 1.5.15
+Version: 1.6.0
 Architecture: iphoneos-arm64
 Depends: ellekit, firmware (>= 17.0), firmware (<< 18.0)
-Description: FolderX 1.5.15: once a large folder owns the icon image, the native mini grid is never revealed again (no yield during transitions, so two grids can never be drawn).
+Description: FolderX 1.6.0 plan A: the native folder grid is re-configured to fill the enlarged icon, so SpringBoard draws the large folder itself and no second grid exists.
 Maintainer: Ning&半生年华
 Author: Ning&半生年华
 Section: Tweaks
