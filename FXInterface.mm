@@ -445,6 +445,19 @@ static NSUInteger FXSetNativeGridWrappersHidden(UIView *root, BOOL hide, NSUInte
 static void FXSetNativeThumbnailVisibility(UIView *imageView, BOOL hide) {
     if (!imageView) return;
     BOOL touched = [objc_getAssociatedObject(imageView, &kFXNativeTouchedKey) boolValue];
+    if (!hide) {
+        // Sticky ownership: while this icon view hosts our own grid, the native
+        // mini grid must never be revealed again. Yielding during a transition
+        // is exactly what let both grids be drawn at the same time.
+        UIView *owner = FXHostForNativeImage(imageView);
+        FXMiniGrid *owned = owner ? objc_getAssociatedObject(owner, &kFXOverlayKey) : nil;
+        if (owned && owned.superview) {
+            FXDiagThrottled([NSString stringWithFormat:@"sticky/%p", imageView], 0.3,
+                            @"grid.sticky refuse-yield %@", NSStringFromClass(imageView.class));
+            hide = YES;
+            touched = YES;
+        }
+    }
     if (!hide && !touched) return;
     FXDiagChanged([NSString stringWithFormat:@"thumb/%@", NSStringFromClass(imageView.class)],
                   [NSString stringWithFormat:@"enter hide=%d touched=%d lock="
