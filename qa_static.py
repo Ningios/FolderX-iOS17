@@ -5,7 +5,7 @@ import math,re
 root=Path(__file__).parent
 src={f.name:f.read_text() for f in root.iterdir() if f.suffix in {'.mm','.xm','.h'}}
 alltext='\n'.join(src.values()); ui=src['FXInterface.mm']; transition=src['FXTransition.xm']; core=src['FXCore.mm']
-expected={'Tweak.xm','FXCore.mm','FXDrop.xm','FXInterface.mm','FXMenu.xm','FXTransition.xm','FXListHit.xm'}
+expected={'Tweak.xm','FXCore.mm','FXDrop.xm','FXInterface.mm','FXMenu.xm','FXTransition.xm'}
 assert expected.issubset(src), expected-set(src)
 for token in ('changeGridSizeClassOfContainedIcon:toGridSizeClass:gridCellInfoOptions:',
               'gridRangeForIcon:gridCellInfoOptions:', 'FXResizeHitView',
@@ -32,7 +32,7 @@ assert 'FXReadNativeGridAlpha' in ui and 'signature.numberOfArguments == 3' in u
 assert 'self.gridColumns == 6 ? 12 : 9' in ui and 'NSUInteger columns = wide ? 6 : 3;' in ui
 assert 'NSUInteger rows = wide ? 2 : 3;' in ui and 'if (out.count >= 12) break;' in core and 'listAtIndex(folder, listSelector, i)' in core
 assert 'for (NSNumber *delay in @[@(0.18), @(0.5)])' not in ui, 'old delayed refresh still present'
-assert '[host layoutIfNeeded];' not in ui.split('BOOL FXCommitSizeForIdentifier(')[1].split('void FXSetNativeFolderPresentationActive')[0], 'nested size transaction still forced'
+assert '[host layoutIfNeeded];' not in ui.split('BOOL FXCommitSizeForHost(')[1].split('void FXSetNativeFolderPresentationActive')[0], 'nested size transaction still forced'
 assert 'UIDropInteraction alloc' not in alltext and 'FXSnapshot' not in alltext
 assert 'fopen(' not in alltext and 'debug.log' not in alltext
 for name,text in src.items():
@@ -66,7 +66,7 @@ print('NOT TESTED: Theos compile / real SpringBoard transitions / native 4x2 cla
 drop=src['FXDrop.xm']
 assert 'addIcons:intoFolderIcon:openFolderOnFinish:completion:' in drop
 assert 'addIcons:intoFolderIcon:openFolderOnFinish:complete:' not in drop
-assert 'FXCaptureNativeTargets(dragWindow)' in drop and '((UIView *)self).window' in drop
+assert 'FXCaptureNativeTargets(selfView.window)' in drop
 assert 'FXCachedTargetForList(list, point)' in drop
 assert 'FXListModel(current)' in drop
 
@@ -97,7 +97,7 @@ print('PASS: folder close completion is gated on !opened')
 # 1.5.0: One native image tree supplies both steady and zoom preview.
 assert 'FXParkGridOnIconHost' not in ui
 assert 'if (!pinnedTransitionGrid)' in ui
-assert 'FXLaunchApp(app);' in ui
+assert 'FXLaunchApp(app, host);' in ui
 assert 'sig.methodReturnType[0]' in core and 'launchFromLocation:context:' in core
 assert 'if (active) return;' in ui
 assert 'BOOL hide = (visible && visible.superview && !visible.hidden)' in ui
@@ -114,11 +114,123 @@ assert 'FXNativeDragGridPolicyHooks' not in drop
 assert 'modelHasNonDefaultSizedIcons' not in drop
 assert 'setModelHasNonDefaultSizedIcons' not in drop
 assert 'FXNativeDragListHasVerifiedLargeFolder' not in drop
-assert 'if (valid && FXDraggedLeaf) FXClearSource();' in drop
-assert 'if (genuineLarge) FXAcquireDragLayoutPause(host, icon);' in ui
+assert 'if (eligible && FXNativeDragIsActive()) FXClearSource();' in drop
+assert 'if (genuineLarge && allowPause) FXAcquireDragLayoutPause(host, icon);' in ui
 assert 'FXWasCapturedWideHost' in drop and 'FXCachedTargetForList(list, point)' in drop
 hover = ui.split('- (void)setDropHovered:(BOOL)hovered {',1)[1].split('- (void)launchAtPoint:',1)[0]
 assert 'borderWidth = hovered' not in hover and 'CABasicAnimation' not in hover
 assert 'systemBlue' not in hover and 'self.layer.borderWidth = 0.0;' in hover
 assert 'FXSetHoveredHost(nil);' in drop
 print('PASS: 1.5.4 intrusive page hooks absent; repeat-drag reset before capture, native per-view guard restored, no blue ring, 4x2 target kept')
+
+# 1.5.7 emergency rollback: edit layout policy is NOT installed.
+assert not (root / 'FXEditLayout.xm').exists()
+assert 'FXEditLayout.xm' not in (root / 'Makefile').read_text()
+assert 'modelHasNonDefaultSizedIcons' not in '\n'.join(v for k,v in src.items() if k != 'FXGridReadPolicy.xm')
+assert 'FXNativeDragLayoutInFlight' not in '\n'.join(src.values())
+assert 'FXReleaseDragLayoutPauseForHost((UIView *)self);' not in src['Tweak.xm']
+assert 'FXSetHoveredHost(nativePermitsDrop ? folderHost : nil)' in drop
+assert 'FXAcquireDragLayoutPause' in ui # original 1.5.5 drag handling unchanged
+assert '@property (nonatomic) BOOL dropHovered;' in ui
+assert 'cell.alpha = self.dropHovered ? 0.48 : 1.0;' in ui
+assert 'for (FXAppCell *cell in self.cells) cell.alpha = targetAlpha;' in ui
+assert 'FXGridOf(' not in hover and 'setGridSizeClass' not in hover
+print('PASS: no failed global grid policy or list hit override; hover-cell opacity preserved')
+
+# 1.5.10 safety/one-variable regression guards.
+assert not (root/'FXListHit.xm').exists()
+assert not (root/'FXEditLayout.xm').exists()
+assert 'FXListHit.xm' not in (root/'Makefile').read_text()
+assert 'FXEditLayout.xm' not in (root/'Makefile').read_text()
+assert 'FXResolveNativeFolderListHit' not in alltext
+assert 'iconAtPoint:(CGPoint)point index:' not in alltext
+assert 'FXNativeDragGridPolicyHooks' not in alltext
+assert 'modelHasNonDefaultSizedIcons' not in ''.join(src.values())
+assert 'modelHasNonDefaultSizedIcons' not in '\n'.join(v for k,v in src.items() if k != 'FXGridReadPolicy.xm')
+assert 'FXAcquireDragLayoutPause(host, icon)' in ui
+assert 'FXReleaseDragLayoutPauseForHost(host)' in drop
+assert 'FXDragLayoutLease' in ui
+assert 'FXSetDropHoverForHost' in drop
+assert 'cell.alpha = self.dropHovered ? 0.48 : 1.0;' in ui
+assert 'for (FXAppCell *cell in self.cells) cell.alpha = targetAlpha;' in ui
+assert 'FXChangeSize' not in drop
+print('PASS: native per-icon pause retained; no list hit override; 2x2/4x2 hover and native drop preserved')
+
+## 1.5.12: v8-confirmed transient App view displacement only.
+assert not (root/'FXGridReadPolicy.xm').exists()
+assert 'FXGridReadPolicy.xm' not in (root/'Makefile').read_text()
+assert 'FXDragAppFrameGuard.xm' in (root/'Makefile').read_text()
+assert 'modelHasNonDefaultSizedIcons' not in '\n'.join(src.values())
+guard=src['FXDragAppFrameGuard.xm']
+assert 'FXGridOf(model, icon)' in guard
+assert 'appRange.gridCellIndex != snap.cellIndex' in guard
+assert 'current.gridCellIndex != zone.occupiedRange.gridCellIndex' in guard
+assert 'FXRejectTransientAppPosition' in guard
+assert '- (void)setFrame:(CGRect)frame' in guard
+assert '- (void)setCenter:(CGPoint)center' in guard
+assert 'FXChangeSize' not in guard and 'setGridSizeClass' not in guard
+assert 'setNeedsLayout' not in guard and 'layoutIfNeeded' not in guard
+assert 'FXStartDragAppFrameGuard(nativeTargets, (UIView *)self);' in drop
+assert 'FXStopDragAppFrameGuard();' in drop
+assert 'FXAcquireDragLayoutPause(host, icon)' in ui
+assert 'FXReleaseDragLayoutPauseForHost(host)' in drop
+assert 'cell.alpha = self.dropHovered ? 0.48 : 1.0;' in ui
+print('PASS 1.5.12: verified-App transient overlap guard only; folder model and 2x2/4x2 size never modified')
+
+# 1.5.13: source-folder drag, incoming page and menu toggle; read-only diagnostics.
+assert 'FXDraggedFolder = FXIsFolder(icon) ? icon : nil;' in drop
+assert 'FXSetDragVisualLockForHostNoPause(host, YES);' in drop
+assert 'FXExtendActiveDragProtectionForList(interaction.view);' in drop
+assert '%group FXIncomingPageProtectionHooks' in drop
+assert 'FXExtendActiveDragProtectionForList((UIView *)self);' in drop
+assert 'FXExtendDragAppFrameGuard(newTargets, FXDraggedFolderHost);' in drop
+assert 'FXStopDragAppFrameGuard();' in drop
+assert 'FXSetDragVisualLockForHostNoPause' in ui
+assert 'FXFolderEntryBlocked' in core and 'FXSetFolderEntryBlockedByIdentifier' in core
+assert 'FXShouldBlockNativeFolderOpen' in ui and 'FXHandleFolderTap(host' in ui
+menu=src['FXMenu.xm']
+assert '禁止进入文件夹' in menu and 'blockOpen.state' in menu
+assert '文件夹大小' not in menu and 'FXCommitSizeForIdentifier' not in menu
+assert 'FXCommitSizeForHost(host, size)' in ui and 'FXCornerHandle' in ui
+assert 'FXChangeSize' not in drop and 'changeGridSizeClassOfContainedIcon' not in drop
+assert 'modelHasNonDefaultSizedIcons' not in drop
+assert (root/'folderx_event_probe_v10_light.js').exists()
+print('PASS 1.5.13: folder-source visual protection without pinning dragged source; incoming-page extension; per-folder entry toggle; 1.5.12 guard intact')
+
+# 1.5.14: reproduce v9 folder-source view jump; native folder manager gate.
+assert 'NSArray<NSDictionary *> *nativeTargets = eligible ?' in drop
+assert 'if (nativeTargets.count)' in drop and 'FXStartDragAppFrameGuard(nativeTargets, (UIView *)self);' in drop
+assert 'if (FXDraggedLeaf || FXDraggedFolder)' in drop
+assert 'FXExtendDragAppFrameGuard(newTargets, FXDraggedFolderHost);' in drop
+guard=src['FXDragAppFrameGuard.xm']
+assert 'FXLastAppSampleByList' in guard and 'now - last.doubleValue < 0.40' in guard
+assert 'overlap.size.width * overlap.size.height > 0.12 * area' in guard
+assert 'FXChangeSize' not in guard and 'setGridSizeClass' not in guard
+assert 'FXShouldBlockFolderOpenIcon(id icon)' in core
+assert 'FXNativeDragIsActive()' not in core.split('BOOL FXShouldBlockFolderOpenIcon')[1].split('void FXSetFolderEntryBlockedByIdentifier')[0]
+assert '%group FXManagerOpenFolderGate' in menu and '%group FXManagerPushFolderGate' in menu
+assert 'FXShouldBlockFolderOpenIcon(icon)' in menu
+assert 'FXChangeSize' not in drop and 'FXChangeSize' not in menu
+print('PASS 1.5.15: folder-source App guard and native entry gate without stale-drag bypass, no size mutation')
+
+# 1.5.16: native temporary model is only bypassed for verified incoming App
+# drags on a DIFFERENT page. This is not a global nonDefault policy hook.
+assert 'FXIncomingTemporaryModelGuardHooks' in drop
+assert 'FXDraggedOriginList' in drop and 'FXDraggedOriginModel' in drop
+assert 'list == FXDraggedOriginList' in drop and 'model == FXDraggedOriginModel' in drop
+assert 'wide == 2 && large == 1' in drop
+assert 'occupiedMask & mask' in drop and 'r.gridCellIndex >= 24' in drop
+assert 'FXDraggedLeaf' in drop and 'FXDraggedFolder' in drop
+assert 'FXDragNativeFinalizing = YES; // Resume original temporary model before drop.' in drop
+assert 'FXDragNativeFinalizing = YES; // Allow original regen on cancel/end too.' in drop
+assert 'FXDragNativeFinalizing ||' in drop
+assert 'FXDraggedOriginList.bounds.size.height < 650' in drop
+assert 'class_getInstanceMethod(listClass,' in drop
+assert 'regenerateTemporaryDisplayedModelIfNecessary {' in drop
+assert 'if (FXCanSkipIncomingTemporaryRegen((UIView *)self)) return;' in drop
+assert 'FXCanSkipIncomingTemporaryRegen' not in src['FXCore.mm']
+assert 'modelHasNonDefaultSizedIcons' not in drop
+assert 'FXGridReadPolicy' not in alltext and 'FXEditLayout' not in alltext
+assert 'FXBeginNativeDrag(possibleSource, sourceUID, bundleID, originList, originModel' in drop
+assert 'FXClearSource(void) {' in drop and 'FXDraggedOriginModel = nil;' in drop
+print('PASS: incoming App-only/other-page/native-grid-verified temp model guard, original drag/entry UI untouched')

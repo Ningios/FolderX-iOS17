@@ -36,11 +36,15 @@ BOOL FXCanUseWideGrid(void);
 BOOL FXShouldRenderLarge(id icon, UIView *host);
 BOOL FXChangeSize(id icon, FXFolderSize target, BOOL persist);
 NSNumber *FXSavedSize(id icon);
+BOOL FXFolderEntryBlocked(id icon);
+// Opening guard for manager-level native actions, not drag or grid layout.
+BOOL FXShouldBlockFolderOpenIcon(id icon);
+void FXSetFolderEntryBlockedByIdentifier(NSString *uid, BOOL blocked);
 void FXRestoreSizeForView(UIView *host);
 NSArray *FXFolderApps(id folderIcon);
 NSString *FXBundleID(id leafIcon);
 UIImage *FXAppImage(NSString *bundleID);
-void FXLaunchApp(id leafIcon);
+void FXLaunchApp(id leafIcon, UIView *sourceHost);
 BOOL FXIsEditing(UIView *iconView);
 BOOL FXNativeDragIsActive(void);
 void FXRememberEditingForView(UIView *host, BOOL editing);

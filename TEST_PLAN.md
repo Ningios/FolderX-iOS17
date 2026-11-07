@@ -1,3 +1,12 @@
+## 1.5.15 focused tests
+
+1. Back up Home Screen layout and retain your known-good 1.5.14 package.
+2. In 3D Touch enable **禁止进入文件夹** on a verified large folder; without any active drag, tap its blank area. It should NOT open; internal App direct launch must still work.
+3. Drag an App over the blocked folder and release to test the native drop path; because spring-opening is now suppressed, verify it still accepts the icon. Toggle the option off to confirm ordinary opening returns.
+4. Drag a large folder and confirm the 1.5.14 fix remains.
+5. If a cross-page drag still reduces a verified 2x2/4x2 to a 60x74 view, run `folderx_layout_caller_probe_v11_light.js` on that exact target page; send FXCALL11 lines. This release purposely does not force frames.
+6. Do not use the old v9 continuous scanner for this test; the v11 probe attaches only during the drag.
+
 # FolderX 1.4.7 真机验收（未在本环境执行）
 
 **前置条件：** 先备份旧 1.4.6 的 DEB 和桌面布局；找一个还有空位的测试页，准备普通 App 与测试文件夹。不要在满屏主页上测试扩容。所有操作先测试一次，不要连续高速拖动。

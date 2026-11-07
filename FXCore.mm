@@ -1,5 +1,4 @@
 #import "FXCore.h"
-#import "FXDiag.h"
 #import <dispatch/dispatch.h>
 #import <math.h>
 #import <string.h>
@@ -8,6 +7,7 @@
 // Separate preferences from every FolderExpand/FolderX 0.x experiment.
 static NSString *const FXPreferencesDomain = @"com.huhansibuxin.folderx.fresh";
 static NSString *const FXSizeMapKey = @"folderSizeByIdentifier";
+static NSString *const FXBlockedOpenMapKey = @"folderOpenBlockedByIdentifier";
 static char kFXRestoreScheduled;
 static char kFXEditingObserved;
 
@@ -174,6 +174,44 @@ NSNumber *FXSavedSize(id icon) {
     return [size isKindOfClass:NSNumber.class] ? size : nil;
 }
 
+// A per-folder menu toggle. Never affects gridSizeClass or drag/drop.
+BOOL FXFolderEntryBlocked(id icon) {
+    if (!FXIsFolder(icon)) return NO;
+    NSString *uid = FXIdentifier(icon);
+    if (!uid.length) return NO;
+    id value = [[FXDefaults() dictionaryForKey:FXBlockedOpenMapKey] objectForKey:uid];
+    return [value isKindOfClass:NSNumber.class] && [value boolValue];
+}
+
+// SBIconView tap callbacks are not the only path to a folder opening on
+// iOS 17. SpringBoardHome can open a folder directly through SBHIconManager.
+// Unlike view-only detection, manager-level opening must use the folder model
+// identity, and must never write icon grid classes or frames.
+BOOL FXShouldBlockFolderOpenIcon(id icon) {
+    // Opening and accepting a drop are different actions. An active (or just
+    // ended) native drag must not silently bypass the per-folder entry block:
+    // FXDrop.xm handles insertion through UIKit's native drop coordinator.
+    // In 1.5.14 the stale drag source is retained up to 1.4 s after lift/end,
+    // which made a blocked folder open on a subsequent tap. Fail closed for
+    // entry regardless of drag state; never modify the drop delegate itself.
+    if (!FXIsFolder(icon) || !FXFolderEntryBlocked(icon))
+        return NO;
+    if (FXIsGenuineLarge(icon)) return YES;
+    NSNumber *saved = FXSavedSize(icon);
+    return saved && (saved.unsignedIntegerValue == FXFolderSizeLarge ||
+                     saved.unsignedIntegerValue == FXFolderSizeWide);
+}
+
+void FXSetFolderEntryBlockedByIdentifier(NSString *uid, BOOL blocked) {
+    if (!uid.length) return;
+    NSUserDefaults *defaults = FXDefaults();
+    NSMutableDictionary *map = [[defaults dictionaryForKey:FXBlockedOpenMapKey] mutableCopy];
+    if (!map) map = [NSMutableDictionary dictionary];
+    if (blocked) map[uid] = @YES;
+    else [map removeObjectForKey:uid];
+    [defaults setObject:map forKey:FXBlockedOpenMapKey];
+}
+
 static void FXSaveSize(id icon, FXFolderSize target) {
     NSString *uid = FXIdentifier(icon);
     if (!uid) return;
@@ -314,62 +352,32 @@ static NSUInteger FXRootItemCount(void) {
 // Prefer the actual layout model's rows/columns. The 1.4.0 magic fallback
 // of 20 cells was smaller than a 4-column x 6-row iPhone 15 Pro home page.
 static NSUInteger FXPageCellCapacity(id list) {
-    if (!list) return 0;
-    // iOS 17 exposes the page grid through several struct ABIs: a 4-byte
-    // uint16 pair, an 8-byte uint32 pair, or a 16-byte CGFloat pair. The old
-    // code required exactly sizeof(CGSize) and therefore returned 0 on
-    // iOS 17.2.1, making FXPreflightExpansion refuse every expansion with
-    // "capacity=0" even though the gesture and the model were both fine.
-    for (NSString *name in @[@"gridSize", @"iconGridSize"]) {
-        SEL sel = NSSelectorFromString(name);
-        if (![list respondsToSelector:sel]) continue;
-        NSMethodSignature *sig = [list methodSignatureForSelector:sel];
-        if (!sig || sig.numberOfArguments != 2 || sig.methodReturnType[0] != '{') continue;
-        NSUInteger length = sig.methodReturnLength;
-        if (length != 4 && length != 8 && length != 16) continue;
-        uint8_t bytes[16] = {0};
-        @try {
-            NSInvocation *call = [NSInvocation invocationWithMethodSignature:sig];
-            call.target = list;
-            call.selector = sel;
-            [call invoke];
-            [call getReturnValue:bytes];
-        } @catch (__unused NSException *exception) { continue; }
-        NSUInteger a = 0, b = 0;
-        if (length == 4) {
-            uint16_t pair[2]; memcpy(pair, bytes, sizeof(pair)); a = pair[0]; b = pair[1];
-        } else if (length == 8) {
-            uint32_t pair[2]; memcpy(pair, bytes, sizeof(pair)); a = pair[0]; b = pair[1];
-        } else {
-            double pair[2]; memcpy(pair, bytes, sizeof(pair));
-            if (isfinite(pair[0]) && isfinite(pair[1])) {
-                a = (NSUInteger)pair[0]; b = (NSUInteger)pair[1];
-            } else {
-                uint64_t raw[2]; memcpy(raw, bytes, sizeof(raw));
-                a = (NSUInteger)raw[0]; b = (NSUInteger)raw[1];
-            }
+    SEL sizeSel = NSSelectorFromString(@"gridSize");
+    if ([list respondsToSelector:sizeSel]) {
+        NSMethodSignature *sig = [list methodSignatureForSelector:sizeSel];
+        if (sig && sig.numberOfArguments == 2 &&
+            sig.methodReturnLength == sizeof(CGSize) &&
+            sig.methodReturnType[0] == '{') {
+            CGSize (*readSize)(id, SEL) = (CGSize (*)(id, SEL))objc_msgSend;
+            CGSize size = readSize(list, sizeSel);
+            // Supports (columns,rows) or (rows,columns); both have 24 cells.
+            if (size.width >= 3 && size.width <= 8 &&
+                size.height >= 3 && size.height <= 9 &&
+                floor(size.width) == size.width && floor(size.height) == size.height)
+                return (NSUInteger)(size.width * size.height);
         }
-        FXDiagChanged(@"capacity.probe",
-                      [NSString stringWithFormat:@"sel=%@ len=%lu a=%lu b=%lu",
-                       name, (unsigned long)length, (unsigned long)a, (unsigned long)b]);
-        // (columns,rows) and (rows,columns) share the same product.
-        if (a >= 2 && a <= 12 && b >= 2 && b <= 12) return a * b;
     }
     NSUInteger maximum = FXUnsigned(list, @"maxIconCount");
-    if (maximum == NSUIntegerMax) maximum = FXUnsigned(list, @"maximumIconCount");
-    FXDiagChanged(@"capacity.max",
-                  [NSString stringWithFormat:@"maxIconCount=%lu",
-                   (unsigned long)maximum]);
-    if (maximum != NSUIntegerMax && maximum >= 6 && maximum <= 60) return maximum;
-    // Last resort: every iPhone runs the standard 4-column home grid.
+    if (maximum != NSUIntegerMax && maximum >= 12 && maximum <= 48)
+        return maximum;
+    // Device-specific fallback only for the stated iPhone 15 Pro display,
+    // running the iOS 17 4x6 home grid. Other layouts fail closed.
     CGSize screen = UIScreen.mainScreen.bounds.size;
-    FXDiagChanged(@"capacity.screen",
-                  [NSString stringWithFormat:@"%.0fx%.0f idiom=%ld",
-                   screen.width, screen.height,
-                   (long)UIDevice.currentDevice.userInterfaceIdiom]);
+    CGFloat narrow = MIN(screen.width, screen.height);
+    CGFloat tall = MAX(screen.width, screen.height);
     if (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone &&
-        MIN(screen.width, screen.height) >= 320 && MAX(screen.width, screen.height) >= 480)
-        return 24; // 4 columns x 6 rows
+        narrow >= 390 && narrow <= 395 && tall >= 850 && tall <= 855)
+        return 24;
     return 0;
 }
 
@@ -438,29 +446,13 @@ id FXFolderWithIdentifier(NSString *uid) {
 BOOL FXChangeSize(id icon, FXFolderSize target, BOOL persist) {
     icon = FXCurrentRootIcon(icon);
     if (!FXIsFolder(icon) || (target != FXFolderSizeSmall &&
-        target != FXFolderSizeLarge && target != FXFolderSizeWide)) {
-        FXDiagLog(@"size.fail notfolder target=%lu folder=%d",
-                  (unsigned long)target, (int)FXIsFolder(icon));
-        return NO;
-    }
-    if (target == FXFolderSizeWide && !FXCanUseWideGrid()) {
-        FXDiagLog(@"size.fail wide-unverified");
-        return NO;
-    }
+        target != FXFolderSizeLarge && target != FXFolderSizeWide)) return NO;
+    if (target == FXFolderSizeWide && !FXCanUseWideGrid()) return NO;
     id list = FXListModel(icon);
     SEL change = NSSelectorFromString(@"changeGridSizeClassOfContainedIcon:toGridSizeClass:gridCellInfoOptions:");
-    if (!list || ![list respondsToSelector:change]) {
-        FXDiagLog(@"size.fail no-list list=%d sel=%d", (int)(list != nil),
-                  (int)(list && [list respondsToSelector:change]));
-        return NO;
-    }
+    if (!list || ![list respondsToSelector:change]) return NO;
     NSMethodSignature *signature = [list methodSignatureForSelector:change];
-    if (!signature || signature.numberOfArguments != 5) {
-        FXDiagLog(@"size.fail signature args=%lu ret=%s",
-                  (unsigned long)(signature ? signature.numberOfArguments : 0),
-                  signature ? signature.methodReturnType : "?");
-        return NO;
-    }
+    if (!signature || signature.numberOfArguments != 5) return NO;
 
     FXGridRange before = FXGridOf(list, icon);
     if (FXSize(icon) == target &&
@@ -475,28 +467,12 @@ BOOL FXChangeSize(id icon, FXFolderSize target, BOOL persist) {
     // resized a completely full page and icons vanished instead of overflowing
     // into a new page; unlike a safe native drag, this method is not a page
     // reflow transaction. Do not mutate an overcrowded page.
-    if (target != FXFolderSizeSmall && !FXPreflightExpansion(icon, list, target)) {
-        NSArray *preflightIcons = FXObject(list, @"icons");
-        FXDiagLog(@"size.fail preflight capacity=%lu array=%d count=%lu target=%lu",
-                  (unsigned long)FXPageCellCapacity(list),
-                  (int)[preflightIcons isKindOfClass:NSArray.class],
-                  (unsigned long)([preflightIcons isKindOfClass:NSArray.class] ? preflightIcons.count : 0),
-                  (unsigned long)target);
-        return NO;
-    }
-    if (FXObserveOnly()) {
-        FXDiagLog(@"observe.size target=%lu capacity=%lu -> would apply, not applied",
-                  (unsigned long)target, (unsigned long)FXPageCellCapacity(list));
-        return NO;
-    }
+    if (target != FXFolderSizeSmall && !FXPreflightExpansion(icon, list, target)) return NO;
     NSArray<NSString *> *beforeInventory = FXRootInventory();
     NSUInteger beforeCount = FXRootItemCount();
     // An identifier-only failure is no longer an unconditional refusal. We
     // still require a complete root item count and spare cells on this page.
-    if (beforeCount == NSUIntegerMax) {
-        FXDiagLog(@"size.fail rootcount-unreadable");
-        return NO;
-    }
+    if (beforeCount == NSUIntegerMax) return NO;
     NSUInteger original = FXSize(icon);
     @try {
         // Private API observed for the target version. Do not assume an
@@ -518,11 +494,6 @@ BOOL FXChangeSize(id icon, FXFolderSize target, BOOL persist) {
         (!beforeInventory || (afterInventory &&
                               [afterInventory isEqualToArray:beforeInventory]));
     BOOL good = FXSize(icon) == target && geometryOK && inventoryOK;
-    FXDiagLog(@"size.apply target=%lu size=%lu range=%lux%lu geometry=%d inventory=%d before=%lu after=%lu",
-              (unsigned long)target, (unsigned long)FXSize(icon),
-              (unsigned long)after.columns, (unsigned long)after.rows,
-              (int)geometryOK, (int)inventoryOK, (unsigned long)beforeCount,
-              (unsigned long)afterCount);
     if (!good && original != target) {
         // The contract has failed: do not persist the enlarged size. This is a
         // best-effort immediate rollback; a manual backup remains essential.
@@ -544,9 +515,6 @@ void FXRestoreSizeForView(UIView *host) {
     if (!uid || !saved || (saved.unsignedIntegerValue != FXFolderSizeLarge &&
                           saved.unsignedIntegerValue != FXFolderSizeWide)) return;
     if (FXIsGenuineLarge(icon)) return;
-    FXDiagLog(@"restore.schedule saved=%lu editing=%d drag=%d",
-              (unsigned long)saved.unsignedIntegerValue, (int)FXIsEditing(host),
-              (int)FXNativeDragIsActive());
 
     // Only schedule once per (reused) icon view/identifier; no repeating timers.
     NSString *scheduledUID = objc_getAssociatedObject(host, &kFXRestoreScheduled);
@@ -642,124 +610,106 @@ UIImage *FXAppImage(NSString *bundleID) {
     return image;
 }
 
-// Launch the tapped app WITHOUT opening its containing folder.
-// 1.5.11: the workspace fallback used to hop onto a background queue, which on
-// iOS 17.2.1 added a visible delay before the app appeared. SpringBoard calls
-// the same API from the main thread, so do that here too, and confirm shortly
-// afterwards that something actually reached the front.
-// Never call the workspace from the main thread: on iOS 17.2.1 it blocks until
-// the main thread answers, which deadlocks for ~10s (measured). Use a dedicated
-// high-priority serial queue instead.
-static dispatch_queue_t FXLaunchQueue(void) {
-    static dispatch_queue_t queue;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        queue = dispatch_queue_create("com.folderx.launch", DISPATCH_QUEUE_SERIAL);
-        dispatch_set_target_queue(queue, dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0));
-    });
-    return queue;
+// iOS 17.1.1 native taps use a non-nil SBIconLaunchContext containing
+// _activationSettings and _iconView. The v19/v20 Frida traces proved that
+// calling -launchFromLocation:context: with nil produces empty settings and
+// a nil workspace entity even though the method returns normally.
+//
+// Request the settings from SpringBoard's OWN launch-settings provider for
+// the existing on-screen SBIconView. We never fabricate activation settings,
+// set model/grid data, or use a NSNumber as an icon location.
+static id FXNativeLaunchSettingsForHost(UIView *host) {
+    Class iconViewClass = NSClassFromString(@"SBIconView");
+    if (!host || !iconViewClass || ![host isKindOfClass:iconViewClass] || !host.window)
+        return nil;
+    id controller = FXObject((id)NSClassFromString(@"SBIconController"), @"sharedInstance");
+    id providers[] = { controller, FXObject(controller, @"iconManager") };
+    SEL selector = NSSelectorFromString(@"launchActivationSettingsForIconView:");
+    Class settingsClass = NSClassFromString(@"SBActivationSettings");
+    if (!settingsClass) return nil;
+    for (NSUInteger i = 0; i < sizeof(providers)/sizeof(providers[0]); ++i) {
+        id provider = providers[i];
+        if (!provider || ![provider respondsToSelector:selector]) continue;
+        NSMethodSignature *signature = [provider methodSignatureForSelector:selector];
+        if (!signature || signature.numberOfArguments != 3 ||
+            signature.methodReturnType[0] != '@' ||
+            [signature getArgumentTypeAtIndex:2][0] != '@') continue;
+        @try {
+            id (*invoke)(id, SEL, id) = (id (*)(id, SEL, id))objc_msgSend;
+            id settings = invoke(provider, selector, host);
+            // Fail closed. An empty settings object was exactly what caused
+            // workspace entity=nil in the v19/v20 device traces.
+            if ([settings isKindOfClass:settingsClass] &&
+                [[settings description] rangeOfString:@"(empty)"].location == NSNotFound)
+                return settings;
+        } @catch (__unused NSException *exception) { }
+    }
+    return nil;
 }
 
-static BOOL FXAppIsFrontmost(NSString *bundleID) {
-    Class controllerClass = NSClassFromString(@"SBApplicationController");
-    id shared = FXObject((id)controllerClass, @"sharedInstance");
-    SEL lookup = NSSelectorFromString(@"applicationWithBundleIdentifier:");
-    if (!shared || ![shared respondsToSelector:lookup]) return YES; // unknown: assume success
-    id (*find)(id, SEL, id) = (id (*)(id, SEL, id))objc_msgSend;
-    id application = nil;
-    @try { application = find(shared, lookup, bundleID); }
-    @catch (__unused NSException *exception) { return YES; }
-    if (!application) return NO;
-    for (NSString *name in @[@"isFrontmostDisplayed", @"isFrontmostApp",
-                             @"isFrontmost", @"isActive"]) {
-        SEL sel = NSSelectorFromString(name);
-        if (![application respondsToSelector:sel]) continue;
-        BOOL (*read)(id, SEL) = (BOOL (*)(id, SEL))objc_msgSend;
-        @try { return read(application, sel); }
-        @catch (__unused NSException *exception) { return YES; }
-    }
-    return YES;
-}
-
-// Private but synchronous-fast entry; must be called on the main thread.
-static BOOL FXLaunchViaUIApplication(NSString *bundleID, CFTimeInterval started) {
-    Class applicationClass = NSClassFromString(@"UIApplication");
-    id shared = FXObject((id)applicationClass, @"sharedApplication");
-    SEL sel = NSSelectorFromString(@"launchApplicationWithIdentifier:suspended:");
-    if (!shared || ![shared respondsToSelector:sel]) return NO;
-    NSMethodSignature *sig = [shared methodSignatureForSelector:sel];
-    if (!sig || sig.numberOfArguments != 4 || sig.methodReturnType[0] != 'v' ||
-        strcmp([sig getArgumentTypeAtIndex:3], @encode(BOOL)) != 0) {
-        FXDiagLog(@"launch.uiapp sig mismatch");
-        return NO;
-    }
+static id FXMakeNativeLaunchContext(UIView *sourceHost) {
+    id settings = FXNativeLaunchSettingsForHost(sourceHost);
+    Class cls = NSClassFromString(@"SBIconLaunchContext");
+    if (!settings || !cls) return nil;
+    Ivar settingsField = class_getInstanceVariable(cls, "_activationSettings");
+    Ivar iconViewField = class_getInstanceVariable(cls, "_iconView");
+    if (!settingsField || !iconViewField ||
+        ivar_getTypeEncoding(settingsField)[0] != '@' ||
+        ivar_getTypeEncoding(iconViewField)[0] != '@') return nil;
+    id context = nil;
     @try {
-        void (*call)(id, SEL, id, BOOL) = (void (*)(id, SEL, id, BOOL))objc_msgSend;
-        call(shared, sel, bundleID, NO);
-        FXDiagLog(@"launch.uiapp after=%.3fs", CACurrentMediaTime() - started);
-        return YES;
-    } @catch (NSException *exception) {
-        FXDiagLog(@"launch.uiapp threw %@: %@", exception.name, exception.reason);
-        return NO;
-    }
+        context = [[cls alloc] init];
+        if (!context || ![context isKindOfClass:cls]) return nil;
+        // These two ivars are independently confirmed on the user's device
+        // by v20 (rather than guessed from a header for another iOS build).
+        object_setIvar(context, settingsField, settings);
+        object_setIvar(context, iconViewField, sourceHost);
+        if (object_getIvar(context, settingsField) != settings ||
+            object_getIvar(context, iconViewField) != sourceHost) return nil;
+    } @catch (__unused NSException *exception) { return nil; }
+    return context;
 }
 
-static void FXLaunchViaWorkspace(NSString *bundleID, CFTimeInterval started, NSString *reason) {
-    void (^body)(void) = ^{
+// Use LaunchServices only when a valid SpringBoard launch context cannot be
+// constructed. Never issue an apparently-successful native call with nil.
+static void FXLaunchAppFallback(NSString *bundleID) {
+    if (!bundleID.length) return;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         Class workspaceClass = NSClassFromString(@"LSApplicationWorkspace");
         id workspace = FXObject((id)workspaceClass, @"defaultWorkspace");
         SEL launch = NSSelectorFromString(@"openApplicationWithBundleID:");
-        if (![workspace respondsToSelector:launch]) {
-            FXDiagLog(@"launch.workspace unavailable selectors");
-            return;
-        }
+        if (![workspace respondsToSelector:launch]) return;
         @try {
-            BOOL (*call)(id, SEL, id) = (BOOL (*)(id, SEL, id))objc_msgSend;
-            (void)call(workspace, launch, bundleID);
-            FXDiagLog(@"launch.workspace reason=%@ after=%.3fs main=%d", reason,
-                      CACurrentMediaTime() - started, (int)[NSThread isMainThread]);
+            BOOL (*invoke)(id, SEL, id) = (BOOL (*)(id, SEL, id))objc_msgSend;
+            (void)invoke(workspace, launch, bundleID);
         } @catch (__unused NSException *exception) { }
-    };
-    dispatch_async(FXLaunchQueue(), ^{
-        if ([NSThread isMainThread]) { FXDiagLog(@"launch.workspace main-thread!"); return; }
-        body();
     });
 }
 
-void FXLaunchApp(id leafIcon) {
+void FXLaunchApp(id leafIcon, UIView *sourceHost) {
     NSString *bundleID = [FXBundleID(leafIcon) copy];
     if (!bundleID.length) return;
-    CFTimeInterval started = CACurrentMediaTime();
-    // 1) Native SBIcon launch: real animation path, no extra hop.
+    NSString *const location = @"SBIconLocationFolder";
     SEL nativeLaunch = NSSelectorFromString(@"launchFromLocation:context:");
-    if (![leafIcon respondsToSelector:nativeLaunch])
-        FXDiagLog(@"launch.native unavailable sel=%d icon=%@", 0,
-                  NSStringFromClass([leafIcon class]));
     if ([leafIcon respondsToSelector:nativeLaunch]) {
         NSMethodSignature *sig = [leafIcon methodSignatureForSelector:nativeLaunch];
-        if (sig && sig.numberOfArguments == 4 && sig.methodReturnType[0] == 'v' &&
+        if (sig && sig.numberOfArguments == 4 &&
+            sig.methodReturnType[0] == 'v' &&
             [sig getArgumentTypeAtIndex:2][0] == '@' &&
             [sig getArgumentTypeAtIndex:3][0] == '@') {
-            @try {
-                void (*call)(id, SEL, id, id) = (void (*)(id, SEL, id, id))objc_msgSend;
-                call(leafIcon, nativeLaunch, @(1), nil);
-                FXDiagLog(@"launch.native elapsed=%.3fs frontmost=%d",
-                          CACurrentMediaTime() - started, (int)FXAppIsFrontmost(bundleID));
-                return;
-            } @catch (NSException *exception) {
-                FXDiagLog(@"launch.native threw %@: %@", exception.name, exception.reason);
-                FXDiagClassMethods(NSStringFromClass([leafIcon class]),
-                                   @[@"launch", @"Launch", @"activate", @"open"]);
+            id context = FXMakeNativeLaunchContext(sourceHost);
+            if (context) {
+                @try {
+                    void (*invoke)(id, SEL, id, id) =
+                        (void (*)(id, SEL, id, id))objc_msgSend;
+                    invoke(leafIcon, nativeLaunch, location, context);
+                    return;
+                } @catch (__unused NSException *exception) { }
             }
-        } else if (sig) {
-            FXDiagLog(@"launch.native rejected sig args=%lu ret=%s",
-                      (unsigned long)sig.numberOfArguments, sig.methodReturnType);
         }
     }
-    // 2) Private UIApplication entry, main thread.
-    if (FXLaunchViaUIApplication(bundleID, started)) return;
-    // 3) Workspace launch, off the main thread.
-    FXLaunchViaWorkspace(bundleID, started, @"direct");
+    // No more nil-context calls that silently produce an empty activation.
+    FXLaunchAppFallback(bundleID);
 }
 
 void FXRememberEditingForView(UIView *host, BOOL editing) {

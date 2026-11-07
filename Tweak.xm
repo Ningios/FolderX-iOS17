@@ -1,5 +1,4 @@
 #import "FXInterface.h"
-#import "FXDiag.h"
 
 // SpringBoard-native folder size and gesture extension:
 //  1. Native list-model 1x1 <-> 2x2 occupancy, not frame scaling.
@@ -27,9 +26,6 @@
 
 - (void)setEditing:(BOOL)editing animated:(BOOL)animated {
     %orig;
-    FXDiagChanged([NSString stringWithFormat:@"edit/%@", NSStringFromClass([FXObject(self, @"icon") class])],
-                  [NSString stringWithFormat:@"editing=%d icon=%@", editing,
-                   NSStringFromClass([FXObject(self, @"icon") class])]);
     FXRememberEditingForView((UIView *)self, editing);
     FXRefreshIconView((UIView *)self);
 }
@@ -46,8 +42,10 @@
 - (void)tapGestureDidChange:(id)gesture {
     if (FXHandleFolderTap((UIView *)self, gesture)) return;
     if ([gesture isKindOfClass:UITapGestureRecognizer.class] &&
-        [(UIGestureRecognizer *)gesture state] == UIGestureRecognizerStateEnded)
+        [(UIGestureRecognizer *)gesture state] == UIGestureRecognizerStateEnded) {
+        if (FXShouldBlockNativeFolderOpen((UIView *)self)) return;
         FXPrepareNativeFolderOpen((UIView *)self);
+    }
     %orig;
 }
 
@@ -73,18 +71,6 @@
 - (void)layoutSubviews {
     %orig;
     FXRefreshNativeImageView((UIView *)self);
-}
-
-// SpringBoard installs a page mini grid here. Re-assert our ownership in the
-// same call so no frame shows the native grid next to our own.
-- (void)fulfillGridImageForPageElement:(id)element {
-    %orig;
-    FXNeutralizeNativeGridAfterUpdate((UIView *)self);
-}
-
-// Plan 3x3: SpringBoard still draws the grid, but with our row/column count.
-- (CGSize)_interiorGridSize {
-    return FXInteriorGridSizeForImageView((UIView *)self, %orig);
 }
 
 %end

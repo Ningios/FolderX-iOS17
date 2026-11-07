@@ -1,5 +1,4 @@
 #import "FXInterface.h"
-#import "FXDiag.h"
 #import <math.h>
 #import <string.h>
 
@@ -13,6 +12,7 @@ static char kFXLastHandledTapTimeKey;
 static char kFXLastHandledFolderKey;
 static char kFXLastHandledAppKey;
 static char kFXNativeOpenPendingKey;
+static char kFXTransitionCloneUIDKey;
 static char kFXResizeTouchPendingUntilKey;
 static char kFXDragVisualLockKey;
 static char kFXDragImageFrameKey;
@@ -57,6 +57,7 @@ static void FXMarkHandled(UIView *host, id app) {
 @interface FXMiniGrid : UIView
 @property (nonatomic, weak) UIView *host;
 @property (nonatomic) BOOL editingAppearance;
+@property (nonatomic) BOOL dropHovered;
 @property (nonatomic, copy) NSArray *apps;
 @property (nonatomic) NSUInteger gridColumns;
 @property (nonatomic, copy) NSArray<NSString *> *displayIDs;
@@ -122,6 +123,9 @@ static void FXMarkHandled(UIView *host, id app) {
         cell.layer.cornerRadius = 8;
         cell.layer.masksToBounds = YES;
         cell.userInteractionEnabled = NO;
+        // A native folder update may rebuild the preview during hover.
+        // Apply the current dim level to new thumbnails immediately.
+        cell.alpha = self.dropHovered ? 0.48 : 1.0;
         if (!image) {
             cell.backgroundColor = [UIColor colorWithWhite:0.77 alpha:0.9];
             // Avoid inserting extra tappable views when private icon loading fails.
@@ -203,11 +207,19 @@ static void FXMarkHandled(UIView *host, id app) {
 }
 
 - (void)setDropHovered:(BOOL)hovered {
-    // 1.5.4: no supplemental blue halo, border, or opacity pulse.
-    // The drop proposal and actual insertion still go through SpringBoard.
-    (void)hovered;
+    // Visual effect only: NEVER mutate folder gridSizeClass, occupied cells,
+    // SBIconView frame, list layout policy, or drag placeholder positions.
+    if (_dropHovered == hovered) return;
+    _dropHovered = hovered;
     [self.layer removeAnimationForKey:@"fx.drop.pulse"];
-    if (self.layer.borderWidth != 0.0) self.layer.borderWidth = 0.0;
+    self.layer.borderWidth = 0.0;
+    CGFloat targetAlpha = hovered ? 0.48 : 1.0;
+    [UIView animateWithDuration:0.14 delay:0
+                        options:UIViewAnimationOptionBeginFromCurrentState |
+                                UIViewAnimationOptionAllowUserInteraction
+                     animations:^{
+        for (FXAppCell *cell in self.cells) cell.alpha = targetAlpha;
+    } completion:nil];
 }
 
 - (void)launchAtPoint:(CGPoint)point {
@@ -222,7 +234,7 @@ static void FXMarkHandled(UIView *host, id app) {
     // press feedback. Delaying this until another layout pass lets the folder
     // open callback win the tap race on some iOS 17 builds. The host tap hook
     // has already marked this gesture handled, so launch exactly once.
-    FXLaunchApp(app);
+    FXLaunchApp(app, host);
 }
 
 - (void)flashCommittedResize {
@@ -266,7 +278,7 @@ static void FXMarkHandled(UIView *host, id app) {
     self.feedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
     self.errorFeedback = [UINotificationFeedbackGenerator new];
     self.accessibilityLabel = @"调整文件夹大小";
-    self.accessibilityHint = @"向右下滑动切换到2×2，2×2向右滑动切换横向4×2，向左或向上滑动缩小；也可通过长按菜单切换";
+    self.accessibilityHint = @"向右下滑动切换到2×2，2×2向右滑动切换横向4×2，向左或向上滑动缩小";
     self.accessibilityTraits = UIAccessibilityTraitButton;
     self.isAccessibilityElement = YES;
     UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(onPan:)];
@@ -275,7 +287,7 @@ static void FXMarkHandled(UIView *host, id app) {
     [self addGestureRecognizer:pan];
     // Only the directional pan may change size. An invisible single-tap
     // toggle stole ordinary edit-mode touches and was too easy to trigger.
-    // The context menu now provides the explicit accessible size action.
+    // Size changes are only initiated by this corner pan or accessibility action.
     return self;
 }
 
@@ -306,12 +318,8 @@ static void FXMarkHandled(UIView *host, id app) {
 - (void)onPan:(UIPanGestureRecognizer *)pan {
     if (pan.state == UIGestureRecognizerStateBegan) {
         self.resizing = FXIsEditing(self.host) && self.host.window && !FXNativeDragIsActive();
-        self.startSize = (FXFolderSize)FXSize(FXObject(self.host, @"icon"));
+        self.startSize = FXSize(FXObject(self.host, @"icon"));
         self.passedThreshold = NO;
-        FXDiagLog(@"pan.begin resizing=%d editing=%d window=%d start=%lu icon=%@",
-                  self.resizing, (int)FXIsEditing(self.host), (int)(self.host.window != nil),
-                  (unsigned long)self.startSize,
-                  NSStringFromClass([FXObject(self.host, @"icon") class]));
         if (self.resizing) [self.feedback prepare];
         return;
     }
@@ -344,7 +352,6 @@ static void FXMarkHandled(UIView *host, id app) {
         CGFloat dx = delta.x, dy = delta.y;
         if (!ended || MAX(fabs(dx), fabs(dy)) < 16.0) {
             self.passedThreshold = NO;
-            FXDiagLog(@"pan.ignore ended=%d dx=%.0f dy=%.0f", ended, dx, dy);
             return;
         }
         FXFolderSize target = self.startSize;
@@ -360,9 +367,6 @@ static void FXMarkHandled(UIView *host, id app) {
         } else if (self.startSize == FXFolderSizeWide) {
             if (dx < -16.0 || dy < -16.0) target = FXFolderSizeLarge;
         }
-        FXDiagLog(@"pan.end start=%lu target=%lu dx=%.0f dy=%.0f wide=%d",
-                  (unsigned long)self.startSize, (unsigned long)target, dx, dy,
-                  (int)FXCanUseWideGrid());
         if (self.startSize != target) [self commitSize:target];
     }
 }
@@ -422,49 +426,10 @@ static BOOL FXReadNativeGridAlpha(id owner, CGFloat *alpha) {
     return NO;
 }
 
-// SpringBoard rebuilds the native mini grid inside _SBIconGridWrapperView and
-// rewrites its alpha during open/close transitions. Alpha therefore leaves a
-// window where the native grid and our FXMiniGrid are both drawn. Hidden is not
-// animated by that path, so use it as the authoritative switch.
-static NSUInteger FXSetNativeGridWrappersHidden(UIView *root, BOOL hide, NSUInteger depth) {
-    if (!root || depth > 3) return 0;
-    NSUInteger changed = 0;
-    for (UIView *child in root.subviews) {
-        if ([NSStringFromClass(child.class) isEqualToString:@"_SBIconGridWrapperView"]) {
-            if (child.hidden != hide) {
-                child.hidden = hide;
-                changed++;
-            }
-            continue; // do not descend into a wrapper we just controlled
-        }
-        changed += FXSetNativeGridWrappersHidden(child, hide, depth + 1);
-    }
-    return changed;
-}
-
 static void FXSetNativeThumbnailVisibility(UIView *imageView, BOOL hide) {
     if (!imageView) return;
     BOOL touched = [objc_getAssociatedObject(imageView, &kFXNativeTouchedKey) boolValue];
-    if (!hide) {
-        // Sticky ownership: while this icon view hosts our own grid, the native
-        // mini grid must never be revealed again. Yielding during a transition
-        // is exactly what let both grids be drawn at the same time.
-        UIView *owner = FXHostForNativeImage(imageView);
-        FXMiniGrid *owned = owner ? objc_getAssociatedObject(owner, &kFXOverlayKey) : nil;
-        if (owned && owned.superview) {
-            FXDiagThrottled([NSString stringWithFormat:@"sticky/%p", imageView], 0.3,
-                            @"grid.sticky refuse-yield %@", NSStringFromClass(imageView.class));
-            hide = YES;
-            touched = YES;
-        }
-    }
     if (!hide && !touched) return;
-    FXDiagChanged([NSString stringWithFormat:@"thumb/%@", NSStringFromClass(imageView.class)],
-                  [NSString stringWithFormat:@"enter hide=%d touched=%d lock="
-                   @"%d alphaSetter=%d", hide, touched,
-                   (int)[imageView respondsToSelector:NSSelectorFromString(@"disableImageUpdatesForReason:")],
-                   (int)[imageView respondsToSelector:NSSelectorFromString(@"setIconGridImageAlpha:")]]);
-    if (FXObserveOnly()) return; // never touch native rendering in observe mode
     // Set state before private setters because they may re-enter layout.
     objc_setAssociatedObject(imageView, &kFXNativeTouchedKey,
                              hide ? @YES : nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -495,10 +460,6 @@ static void FXSetNativeThumbnailVisibility(UIView *imageView, BOOL hide) {
     SEL setGridAlpha = NSSelectorFromString(@"setIconGridImageAlpha:");
     UIView *alphaOwner = [imageView respondsToSelector:setGridAlpha] ?
                           imageView : FXHostForNativeImage(imageView);
-    if (!alphaOwner || ![alphaOwner respondsToSelector:setGridAlpha])
-        FXDiagChanged([NSString stringWithFormat:@"alphaMissing/%@", NSStringFromClass(imageView.class)],
-                      [NSString stringWithFormat:@"image=%@ owner=%@", NSStringFromClass(imageView.class),
-                       alphaOwner ? NSStringFromClass(alphaOwner.class) : @"nil"]);
     if (alphaOwner && [alphaOwner respondsToSelector:setGridAlpha]) {
         CGFloat observed = 0;
         BOOL hasGetter = FXReadNativeGridAlpha(alphaOwner, &observed);
@@ -507,13 +468,6 @@ static void FXSetNativeThumbnailVisibility(UIView *imageView, BOOL hide) {
         NSMethodSignature *signature = [alphaOwner methodSignatureForSelector:setGridAlpha];
         BOOL compatible = signature && signature.numberOfArguments == 3 &&
                           strcmp([signature getArgumentTypeAtIndex:2], @encode(CGFloat)) == 0;
-        FXDiagChanged([NSString stringWithFormat:@"alpha/%@", NSStringFromClass(alphaOwner.class)],
-                      [NSString stringWithFormat:@"needs=%d compat=%d getter=%d obs=%.2f "
-                       @"want=%.1f reentrant=%d arg=%s", needsUpdate, compatible, hasGetter,
-                       observed, hide ? 0.0 : 1.0,
-                       (int)[objc_getAssociatedObject(alphaOwner, &kFXNativeAlphaMutationKey) boolValue],
-                       signature && signature.numberOfArguments > 2 ?
-                           [signature getArgumentTypeAtIndex:2] : "?"]);
         if (needsUpdate && compatible &&
             ![objc_getAssociatedObject(alphaOwner, &kFXNativeAlphaMutationKey) boolValue]) {
             // The native setter may synchronously trigger layout; a recursive
@@ -532,35 +486,8 @@ static void FXSetNativeThumbnailVisibility(UIView *imageView, BOOL hide) {
         }
     }
 
-    NSUInteger hiddenWrappers = FXSetNativeGridWrappersHidden(imageView, hide, 0);
-    FXDiagChanged([NSString stringWithFormat:@"wrappers/%@", NSStringFromClass(imageView.class)],
-                  [NSString stringWithFormat:@"hide=%d changed=%lu",
-                   hide, (unsigned long)hiddenWrappers]);
-
-    // The 1.5.11 view-tree dump identified the leftover native mini grid as
-    // _SBIconGridWrapperView inside SBFolderIconImageView. Alpha alone leaves a
-    // window when SpringBoard repopulates it; keep the page-grid flag in the
-    // same state so a repaint cannot reveal it.
-    SEL pageHiddenSel = NSSelectorFromString(@"setPageGridHidden:");
-    if ([imageView respondsToSelector:pageHiddenSel]) {
-        NSMethodSignature *pageSig = [imageView methodSignatureForSelector:pageHiddenSel];
-        if (pageSig && pageSig.numberOfArguments == 3 &&
-            strcmp([pageSig getArgumentTypeAtIndex:2], @encode(BOOL)) == 0) {
-            FXDiagChanged([NSString stringWithFormat:@"pageHidden/%@",
-                           NSStringFromClass(imageView.class)],
-                          [NSString stringWithFormat:@"hide=%d", hide]);
-            @try {
-                void (*setPage)(id, SEL, BOOL) = (void (*)(id, SEL, BOOL))objc_msgSend;
-                setPage(imageView, pageHiddenSel, hide);
-            } @catch (__unused NSException *ex) { }
-        }
-    }
-
     id value = FXPageGridContainer(imageView, 0);
     UIView *page = [value isKindOfClass:UIView.class] ? (UIView *)value : nil;
-    FXDiagChanged([NSString stringWithFormat:@"page/%@", NSStringFromClass(imageView.class)],
-                  [NSString stringWithFormat:@"found=%d hide=%d opacity=%.2f",
-                   page != nil, hide, page ? page.layer.opacity : -1.0]);
     if (page) {
         // Record the original opacity on the ACTUAL native page.  SpringBoard
         // can replace the page while keeping the SBFolderIconImageView alive.
@@ -635,6 +562,66 @@ static UIView *FXRootListForHost(UIView *host) {
     return nil;
 }
 
+// v1.5.20: SpringBoard creates a SECOND SBIconView for the SAME folder during
+// its open/close zoom. Frida v22/v24 showed this view is outside the original
+// SBIconListView, with its own FXMiniGrid. Hide only that temporary preview;
+// keep the real Home Screen icon and native controller completely unchanged.
+//
+// The temporary view can survive the manager's close callback for one more
+// render pass. Do not restore it at close completion (v23's tiny->large flash).
+// Restore only when SpringBoard genuinely reuses the icon view in an icon
+// list, or rebinds it to another icon. The tag holds a STRING, not a dangling
+// nonretained model pointer; no transition controller is held past callbacks.
+static void FXSetTransitionCloneGridAlpha(FXMiniGrid *grid, CGFloat alpha) {
+    if (!grid || fabs(grid.alpha - alpha) <= 0.001) return;
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    grid.alpha = alpha;
+    [CATransaction commit];
+}
+
+static void FXGuardTransitionCloneGrid(UIView *host, id folder, FXMiniGrid *grid) {
+    if (!host || !grid) return;
+    NSString *mutedUID = objc_getAssociatedObject(host, &kFXTransitionCloneUIDKey);
+    BOOL inNativeIconList = (FXRootListForHost(host) != nil);
+    NSString *currentUID = FXIsFolder(folder) ? FXIdentifier(folder) : nil;
+    BOOL isTransitionClone = NO;
+
+    // Exact model identity, not matching size or overlapping frames. Require
+    // an existing original icon view IN a real icon list, marked as undergoing
+    // a native folder open, before suppressing a second icon view outside it.
+    if (!inNativeIconList && currentUID.length && FXKnownFolderHosts) {
+        for (UIView *original in FXKnownFolderHosts.allObjects) {
+            if (original == host || !original.window ||
+                FXObject(original, @"icon") != folder ||
+                !FXRootListForHost(original) ||
+                !FXIsYieldingToNativeOpen(original) ||
+                original.bounds.size.width < 100.0) continue;
+            isTransitionClone = YES;
+            break;
+        }
+    }
+    if (isTransitionClone) {
+        if (![mutedUID isEqualToString:currentUID])
+            objc_setAssociatedObject(host, &kFXTransitionCloneUIDKey, currentUID,
+                                     OBJC_ASSOCIATION_COPY_NONATOMIC);
+        FXSetTransitionCloneGridAlpha(grid, 0.0);
+        return;
+    }
+    if (mutedUID) {
+        // Once the native transition finishes, a temporary clone can remain
+        // off-list briefly. Keep it muted until removed; never unmute it just
+        // because the manager reports close-complete.
+        if (!inNativeIconList && [mutedUID isEqualToString:currentUID]) {
+            FXSetTransitionCloneGridAlpha(grid, 0.0);
+            return;
+        }
+        objc_setAssociatedObject(host, &kFXTransitionCloneUIDKey, nil,
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        FXSetTransitionCloneGridAlpha(grid, 1.0);
+    }
+}
+
 static BOOL FXObjectMethodABI(id target, SEL selector, BOOL returnsObject,
                               NSUInteger arguments) {
     if (!target || ![target respondsToSelector:selector]) return NO;
@@ -653,7 +640,6 @@ static BOOL FXObjectMethodABI(id target, SEL selector, BOOL returnsObject,
 // acquire a native pause. Saved preferences / oversized visual bounds alone
 // are not permission to block layout.
 static void FXAcquireDragLayoutPause(UIView *host, id icon) {
-    if (FXObserveOnly()) return;
     if (objc_getAssociatedObject(host, &kFXDragLayoutLeaseKey) ||
         !host.window || !FXIsGenuineLarge(icon)) return;
     UIView *list = FXRootListForHost(host);
@@ -697,9 +683,8 @@ void FXReleaseDragLayoutPauseForHost(UIView *host) {
 // 2x2/4x2. Preserve ONLY the current visual image geometry. Never change the
 // SBIconView's frame, its grid class, or the layout model during a drag.
 // Called after source capture, when the image frame is still known-good.
-void FXSetDragVisualLockForHost(UIView *host, BOOL locked) {
+static void FXSetDragVisualLockInternal(UIView *host, BOOL locked, BOOL allowPause) {
     if (!host || ![host isKindOfClass:UIView.class]) return;
-    if (FXObserveOnly()) return;
     id icon = FXObject(host, @"icon");
     if (locked) {
         NSNumber *saved = FXSavedSize(icon);
@@ -716,7 +701,7 @@ void FXSetDragVisualLockForHost(UIView *host, BOOL locked) {
         // NOT depend on discovering an inner SBFolderIconImageView: on wide
         // (4x2) icons that subview can be absent/replaced during drag lift.
         // FXAcquireDragLayoutPause independently rejects non-genuine folders.
-        if (genuineLarge) FXAcquireDragLayoutPause(host, icon);
+        if (genuineLarge && allowPause) FXAcquireDragLayoutPause(host, icon);
         // The image lock below is separate, best-effort visual protection.
         UIView *image = FXNativeImageView(host);
         if (!image || !image.superview || !image.window) return;
@@ -746,6 +731,14 @@ void FXSetDragVisualLockForHost(UIView *host, BOOL locked) {
     FXRefreshIconView(host);
 }
 
+void FXSetDragVisualLockForHost(UIView *host, BOOL locked) {
+    FXSetDragVisualLockInternal(host, locked, YES);
+}
+
+void FXSetDragVisualLockForHostNoPause(UIView *host, BOOL locked) {
+    FXSetDragVisualLockInternal(host, locked, NO);
+}
+
 static BOOL FXDragVisualLocked(UIView *host) {
     NSString *uid = objc_getAssociatedObject(host, &kFXDragVisualLockKey);
     if (![uid isKindOfClass:NSString.class] || !host.window) return NO;
@@ -757,7 +750,6 @@ static BOOL FXDragVisualLocked(UIView *host) {
 }
 
 static void FXStabilizeNativeImageDuringDrag(UIView *host, UIView *image) {
-    if (FXObserveOnly()) return;
     if (!FXDragVisualLocked(host) || !image) return;
     NSValue *parent = objc_getAssociatedObject(host, &kFXDragImageParentKey);
     NSValue *original = objc_getAssociatedObject(host, &kFXDragImageFrameKey);
@@ -805,86 +797,15 @@ static NSUInteger FXPreviewColumns(id icon, UIView *host) {
     return 3;
 }
 
-// ---- Plan 3x3: keep the native grid, but change its dimensions --------------
-// SpringBoard draws the folder grid itself; the only thing that was wrong is the
-// grid's row/column count (it still used the 1x1 layout). Returning 3x3 here makes
-// the system lay out nine slots across the enlarged frame.
-CGSize FXInteriorGridSizeForImageView(UIView *imageView, CGSize original) {
-    if (!imageView) return original;
-    UIView *host = FXHostForNativeImage(imageView);
-    id icon = host ? FXObject(host, @"icon") : nil;
-    if (!FXIsFolder(icon)) return original;
-    NSUInteger sizeClass = FXSize(icon);
-    if (sizeClass != FXFolderSizeLarge && sizeClass != FXFolderSizeWide) return original;
-    // `_interiorGridSize` is the AREA available to the interior grid, in points
-    // (log: 45x45 for a 1x1 folder, 59x59 in some layouts) - NOT a row/column
-    // count. That is why returning CGSizeMake(3, 3) earlier shrank the grid to
-    // three points. Return the enlarged icon frame instead so SpringBoard lays
-    // its own grid out across the whole folder.
-    CGSize frame = imageView.bounds.size;
-    if (frame.width < 100.0 || frame.height < 100.0) frame = CGSizeMake(170.0, 170.0);
-    CGFloat inset = 12.0;
-    CGSize result = CGSizeMake(MAX(60.0, frame.width - inset * 2.0),
-                               MAX(60.0, frame.height - inset * 2.0));
-    FXDiagChanged([NSString stringWithFormat:@"interior/%p", imageView],
-                  [NSString stringWithFormat:@"size=%lu orig=%.0fx%.0f -> %.0fx%.0f",
-                   (unsigned long)sizeClass, original.width, original.height,
-                   result.width, result.height]);
-    return result;
-}
-
-// ---- Plan A: let SpringBoard draw the large folder itself -------------------
-// The interior grid never followed the icon's new size class because the resize
-// path only changes the model. Re-running the grid setup makes SpringBoard lay
-// out its own grid across the whole 170x170 frame, so there is exactly one grid.
-#ifdef FX_NATIVE_GRID_ONLY
-static void FXActivateNativeGrid(UIView *host, UIView *imageView, NSUInteger sizeClass) {
-    if (!imageView) return;
-    if (sizeClass != FXFolderSizeLarge && sizeClass != FXFolderSizeWide) return;
-    FXSetNativeGridWrappersHidden(imageView, NO, 0);
-    SEL alphaSel = NSSelectorFromString(@"setIconGridImageAlpha:");
-    if ([imageView respondsToSelector:alphaSel]) {
-        void (*setAlpha)(id, SEL, CGFloat) = (void (*)(id, SEL, CGFloat))objc_msgSend;
-        @try { setAlpha(imageView, alphaSel, 1.0); } @catch (__unused NSException *ex) { }
-    }
-    SEL pageSel = NSSelectorFromString(@"setPageGridHidden:");
-    if ([imageView respondsToSelector:pageSel]) {
-        void (*setPage)(id, SEL, BOOL) = (void (*)(id, SEL, BOOL))objc_msgSend;
-        @try { setPage(imageView, pageSel, NO); } @catch (__unused NSException *ex) { }
-    }
-    static NSMutableSet<NSString *> *configured = nil;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{ configured = [NSMutableSet set]; });
-    NSString *uid = FXIdentifier(FXObject(host, @"icon")) ?: @"?";
-    NSString *key = [NSString stringWithFormat:@"%@-%lu", uid, (unsigned long)sizeClass];
-    if ([configured containsObject:key]) return;
-    [configured addObject:key];
-    SEL setup = NSSelectorFromString(@"_setupGridViewsInDefaultConfiguration");
-    if ([imageView respondsToSelector:setup]) {
-        void (*call)(id, SEL) = (void (*)(id, SEL))objc_msgSend;
-        @try { call(imageView, setup); } @catch (__unused NSException *ex) { }
-    }
-    for (NSString *name in @[@"_showLeftMinigrid", @"_showRightMinigrid"]) {
-        SEL sel = NSSelectorFromString(name);
-        if (![imageView respondsToSelector:sel]) continue;
-        void (*call)(id, SEL) = (void (*)(id, SEL))objc_msgSend;
-        @try { call(imageView, sel); } @catch (__unused NSException *ex) { }
-    }
-    [imageView setNeedsLayout];
-    [host setNeedsLayout];
-    FXDiagLog(@"nativegrid.setup size=%lu", (unsigned long)sizeClass);
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{
-        FXDiagViewTree(imageView, [NSString stringWithFormat:@"nat/%p", imageView]);
-    });
-}
-#endif
-
 void FXRefreshIconView(UIView *host) {
     if (!host || ![host isKindOfClass:UIView.class]) return;
     id icon = FXObject(host, @"icon");
     FXCornerHandle *handle = objc_getAssociatedObject(host, &kFXHandleKey);
     if (!FXIsFolder(icon)) {
+        // A muted transition icon view may later be rebound to an App.
+        // Never carry its visual suppression into the recycled host.
+        objc_setAssociatedObject(host, &kFXTransitionCloneUIDKey, nil,
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         FXSetNativeThumbnailVisibility(FXNativeImageView(host), NO);
         FXRemoveOverlay(host);
         if (handle) {
@@ -897,8 +818,6 @@ void FXRefreshIconView(UIView *host) {
     if (!FXKnownFolderHosts) FXKnownFolderHosts = [NSHashTable weakObjectsHashTable];
     [FXKnownFolderHosts addObject:host];
     UIView *nativeImage = FXNativeImageView(host);
-    FXDiagProbeImageView(nativeImage);
-    if (nativeImage) FXDiagDumpGridMethods(NSStringFromClass(nativeImage.class));
     CGFloat width = host.bounds.size.width;
     CGFloat height = host.bounds.size.height;
     CGFloat side = floor(MIN(width, height > 14 ? height - 14 : height));
@@ -961,45 +880,6 @@ void FXRefreshIconView(UIView *host) {
     // thumbnail showed during the zoom and then overlapped our large cells.
     BOOL suppressNative = showOverlay ||
         (wantsExpanded && !geometrySettled) || dragVisualLock;
-    FXDiagChanged([NSString stringWithFormat:@"host/%p", host],
-                  [NSString stringWithFormat:@"size=%lu w=%.0f h=%.0f native=%@ nb=%.0fx%.0f "
-                   @"match=%d settled=%d overlay=%d pinned=%d suppress=%d drag=%d open=%d "
-                   @"cells=%lu sup=%@ fn=%@", (unsigned long)sizeClass, width, height,
-                   nativeImage ? NSStringFromClass(nativeImage.class) : @"nil",
-                   nativeImage ? nativeImage.bounds.size.width : 0.0,
-                   nativeImage ? nativeImage.bounds.size.height : 0.0,
-                   nativeMatchesHost, geometrySettled, showOverlay, pinnedTransitionGrid,
-                   suppressNative, dragVisualLock, transitionOwner,
-                   (unsigned long)transitionGrid.cells.count,
-                   transitionGrid.superview ? NSStringFromClass(transitionGrid.superview.class) : @"nil",
-                   NSStringFromClass(FXObject(host, @"icon") ?
-                                     [FXObject(host, @"icon") class] : [NSObject class])]);
-    if (FXObserveOnly()) return; // observe mode installs and moves nothing
-#ifdef FX_NATIVE_GRID_ONLY
-    {
-        FXMiniGrid *mine = objc_getAssociatedObject(host, &kFXOverlayKey);
-        if (mine) mine.hidden = YES;
-        FXActivateNativeGrid(host, nativeImage, sizeClass);
-        BOOL editingNow = FXIsEditing(host);
-        if (editingNow && side > 30 && host.window) {
-            if (!handle) {
-                handle = [[FXCornerHandle alloc] initWithFrame:CGRectMake(0, 0, 48, 48)];
-                handle.host = host;
-                [host addSubview:handle];
-                objc_setAssociatedObject(host, &kFXHandleKey, handle,
-                                         OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            }
-            CGFloat hotSide = side < 90 ? 34.0 : 48.0;
-            CGRect frame = CGRectMake(round(MAX(0, width - hotSide)),
-                                      round(MAX(0, side - hotSide)), hotSide, hotSide);
-            if (!CGRectEqualToRect(handle.frame, frame)) handle.frame = frame;
-            handle.hidden = NO;
-        } else if (handle) {
-            handle.hidden = YES;
-        }
-        return;
-    }
-#endif
     // Atomic visual hand-off: hide the custom grid BEFORE revealing the
     // native thumbnail; on the opposite path hide native first, reveal ours
     // after the cell layout. This eliminates the one-frame double image.
@@ -1048,8 +928,10 @@ void FXRefreshIconView(UIView *host) {
             [overlay setNeedsLayout];
             [overlay layoutIfNeeded];
         }
+        // Apply before unhiding so a newly created transition copy cannot
+        // show even one frame of duplicate mini-icons.
+        FXGuardTransitionCloneGrid(host, icon, overlay);
         overlay.hidden = NO;
-        FXDiagViewTree(nativeImage, [NSString stringWithFormat:@"tree/%p", nativeImage]);
         // Do not make the native tap recognizer depend on an overlay tap.
         // That dependency intercepted long presses and sometimes opened the
         // folder underneath a direct launch.
@@ -1061,6 +943,9 @@ void FXRefreshIconView(UIView *host) {
         [oldOverlay setDropHovered:NO];
         oldOverlay.hidden = YES;
         oldOverlay.userInteractionEnabled = NO;
+        // Also restore alpha if SpringBoard recycled a previously muted
+        // transition view back into a real list in this no-overlay pass.
+        FXGuardTransitionCloneGrid(host, icon, oldOverlay);
     }
 
     // The handle belongs to the icon, not to its thumbnail image or menu view.
@@ -1101,13 +986,8 @@ void FXRefreshIconView(UIView *host) {
 // A single checked resize transaction is shared by the invisible corner
 // gesture and the system context-menu action. No fabricated view geometry.
 BOOL FXCommitSizeForHost(UIView *host, FXFolderSize size) {
-    if (!host || !FXIsFolder(FXObject(host, @"icon"))) { FXDiagLog(@"commit.host reject"); return NO; }
-    if (!host.window || FXNativeDragIsActive() || FXNativeFolderIsPresented) {
-        FXDiagLog(@"commit.host blocked window=%d drag=%d presented=%d",
-                  (int)(host.window != nil), (int)FXNativeDragIsActive(),
-                  (int)FXNativeFolderIsPresented);
-        return NO;
-    }
+    if (!host || !FXIsFolder(FXObject(host, @"icon"))) return NO;
+    if (!host.window || FXNativeDragIsActive() || FXNativeFolderIsPresented) return NO;
     if (!FXChangeSize(FXObject(host, @"icon"), size, YES)) return NO;
     [host setNeedsLayout];
     Class listClass = NSClassFromString(@"SBIconListView");
@@ -1123,34 +1003,6 @@ BOOL FXCommitSizeForHost(UIView *host, FXFolderSize size) {
     return YES;
 }
 
-// Context menu previews can replace the SBIconView while dismissing. Resolve
-// the current live folder by stable UID; do not depend on the stale weak view.
-BOOL FXCommitSizeForIdentifier(NSString *uid, FXFolderSize size) {
-    if (!uid.length || FXNativeDragIsActive() || FXNativeFolderIsPresented) {
-        FXDiagLog(@"commit.uid blocked uid=%d drag=%d presented=%d", (int)(uid.length > 0),
-                  (int)FXNativeDragIsActive(), (int)FXNativeFolderIsPresented);
-        return NO;
-    }
-    id folder = FXFolderWithIdentifier(uid);
-    if (!folder) { FXDiagLog(@"commit.uid folder-not-found"); return NO; }
-    if (!FXChangeSize(folder, size, YES)) return NO;
-    for (UIView *host in FXKnownFolderHosts.allObjects) {
-        if (!host.window || ![FXIdentifier(FXObject(host, @"icon")) isEqualToString:uid])
-            continue;
-        [host setNeedsLayout];
-        Class listClass = NSClassFromString(@"SBIconListView");
-        for (UIView *ancestor = host.superview; ancestor; ancestor = ancestor.superview) {
-            if (listClass && [ancestor isKindOfClass:listClass]) {
-                [ancestor setNeedsLayout];
-                break;
-            }
-        }
-        // Do not run a nested layout while the list model is committing.
-        // The normal SBIconView.layoutSubviews hook is the single paint point.
-    }
-    return YES;
-}
-
 // The native SBFolderController and SBHIconManager decide when transitions
 // finish. Keep our existing live thumbnail on the stable host until both
 // lifecycle callbacks agree that the native close is complete.
@@ -1160,8 +1012,6 @@ void FXSetNativeFolderPresentationActive(BOOL active) {
     // folder. Only a host marked by FXPrepareNativeFolderOpen yielded its grid.
     BOOL wasPresented = FXNativeFolderIsPresented;
     FXNativeFolderIsPresented = active;
-    FXDiagEvent(@"presentation", @{@"active": @(active), @"was": @(wasPresented),
-                                   @"hosts": @(FXKnownFolderHosts.allObjects.count)});
     // The grid stays inside the native folder image for both animation and
     // context-menu previews. Here we only release the per-folder transition
     // freeze once SpringBoard has completed the close.
@@ -1181,33 +1031,7 @@ void FXSetNativeFolderPresentationActive(BOOL active) {
     }
 }
 
-// Logos hooks -fulfillGridImageForPageElement: and forwards here. That method is
-// the point where SpringBoard installs a page's mini grid; re-asserting inside
-// the same call removes the frame where the native grid and ours are both alive.
-void FXNeutralizeNativeGridAfterUpdate(UIView *imageView) {
-#ifdef FX_NATIVE_GRID_ONLY
-    return; // plan A renders the native grid on purpose
-#endif
-    if (FXObserveOnly() || !imageView) return;
-    UIView *host = FXHostForNativeImage(imageView);
-    FXMiniGrid *overlay = objc_getAssociatedObject(host, &kFXOverlayKey);
-    if (!overlay || overlay.hidden || !overlay.superview) return; // not our folder
-    static char kFXNeutralizeDepth;
-    NSNumber *depth = objc_getAssociatedObject(imageView, &kFXNeutralizeDepth);
-    if (depth.integerValue > 1) return; // never recurse into our own suppression
-    objc_setAssociatedObject(imageView, &kFXNeutralizeDepth, @(depth.integerValue + 1),
-                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    FXDiagThrottled([NSString stringWithFormat:@"neut/%p", imageView], 0.2,
-                    @"grid.neutralize %@", NSStringFromClass(imageView.class));
-    FXSetNativeThumbnailVisibility(imageView, YES);
-    objc_setAssociatedObject(imageView, &kFXNeutralizeDepth, nil,
-                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-}
-
 void FXRefreshNativeImageView(UIView *imageView) {
-#ifdef FX_NATIVE_GRID_ONLY
-    return; // plan A renders the native grid on purpose
-#endif
     if (!imageView) return;
     UIView *view = imageView.superview;
     Class iconViewClass = NSClassFromString(@"SBIconView");
@@ -1216,13 +1040,6 @@ void FXRefreshNativeImageView(UIView *imageView) {
             FXMiniGrid *visible = objc_getAssociatedObject(view, &kFXOverlayKey);
             id icon = FXObject(view, @"icon");
             UIView *actualImage = FXNativeImageView(view) ?: imageView;
-            // 1.5.6 logged hide=1 on the App Library indicator's image view:
-            // SB*IconImageView subclasses share these selectors. Only a real
-            // folder icon may have its native grid suppressed.
-            if (!FXIsFolder(icon)) {
-                FXSetNativeThumbnailVisibility(actualImage, NO);
-                return;
-            }
             FXStabilizeNativeImageDuringDrag(view, actualImage);
             CGFloat height = view.bounds.size.height;
             BOOL frameMatches = fabs(actualImage.bounds.size.width - view.bounds.size.width) <= 5.0 &&
@@ -1255,13 +1072,7 @@ BOOL FXHandleFolderTap(UIView *host, id gesture) {
     if (!overlay || !overlay.superview || overlay.hidden) return NO;
     CGPoint local = [overlay convertPoint:[tap locationInView:host] fromView:host];
     id app = [overlay appAtPoint:local];
-    if (!app) {
-        FXDiagThrottled([NSString stringWithFormat:@"tapmiss/%p", host], 0.5,
-                        @"tap.passthrough host=%p state=%ld cells=%lu",
-                        host, (long)tap.state, (unsigned long)overlay.cells.count);
-        return NO;
-    }
-    FXDiagLog(@"tap.app host=%p index=%ld", host, (long)[overlay indexAtPoint:local]);
+    if (!app) return NO;
     // Returning YES here prevents a repeated native open for the SAME tap;
     // a fast second tap on another cell remains independently actionable.
     if (FXRecentlyHandledApp(host, app)) return YES;
@@ -1269,10 +1080,21 @@ BOOL FXHandleFolderTap(UIView *host, id gesture) {
     return YES;
 }
 
+BOOL FXShouldBlockNativeFolderOpen(UIView *host) {
+    // Block an actual opening attempt even if the user has just completed
+    // dragging or is in icon-edit mode. The resize handle and drop delegate
+    // are separate routes and remain untouched.
+    if (!host) return NO;
+    // Same identity check as the manager-level guard: the menu preference
+    // must work even when this view is recycled or its bounds are transient.
+    return FXShouldBlockFolderOpenIcon(FXObject(host, @"icon"));
+}
+
 BOOL FXSuppressNativeFolderAction(UIView *host) {
     if (!host) return NO;
     if (FXRecentlyHandled(host)) return YES;
-    return FXHandleFolderTap(host, FXObject(host, @"tapGestureRecognizer"));
+    if (FXHandleFolderTap(host, FXObject(host, @"tapGestureRecognizer"))) return YES;
+    return FXShouldBlockNativeFolderOpen(host);
 }
 
 void FXSetDropHoverForHost(UIView *host, BOOL hovered) {
@@ -1285,7 +1107,7 @@ void FXSetDropHoverForHost(UIView *host, BOOL hovered) {
 // image that SpringBoard uses as its transition source. Moving it to a sibling
 // icon host before the snapshot was the 1.4.9 double-image regression.
 void FXPrepareNativeFolderOpen(UIView *host) {
-    if (!host || FXIsEditing(host)) return;
+    if (!host || FXIsEditing(host) || FXShouldBlockNativeFolderOpen(host)) return;
     FXMiniGrid *overlay = objc_getAssociatedObject(host, &kFXOverlayKey);
     if (!overlay || overlay.hidden || !overlay.superview) return;
     if (FXIsYieldingToNativeOpen(host) || FXNativeFolderIsPresented) return;
@@ -1295,10 +1117,6 @@ void FXPrepareNativeFolderOpen(UIView *host) {
     if (!openedUID.length) return;  // do not mutate a recycled/unknown host
     objc_setAssociatedObject(host, &kFXNativeOpenPendingKey, openedUID,
                              OBJC_ASSOCIATION_COPY_NONATOMIC);
-    FXDiagEvent(@"open.prepare", @{@"size": @(FXSize(FXObject(host, @"icon"))),
-                                   @"cells": @(overlay.cells.count),
-                                   @"overlayParent": overlay.superview ?
-                                       NSStringFromClass(overlay.superview.class) : @"nil"});
     // The native SBFolderIconImageView retains its large drawn content while
     // SpringBoard captures / animates it. Its own alpha transition applies to
     // the same grid; there is no second live grid left behind on SBIconView.
@@ -1336,9 +1154,6 @@ UIView *FXResizeHitView(UIView *host, CGPoint point, UIEvent *event) {
         objc_setAssociatedObject(host, &kFXResizeTouchPendingUntilKey,
                                  @(CACurrentMediaTime() + 1.05),
                                  OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    FXDiagThrottled([NSString stringWithFormat:@"hit/%p", host], 0.3,
-                    @"resize.hit host=%p bounds=%.0fx%.0f local=%.0f,%.0f",
-                    host, host.bounds.size.width, host.bounds.size.height, local.x, local.y);
     return handle;
 }
 
