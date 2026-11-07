@@ -11,7 +11,7 @@ FINALPACKAGE ?= 1
 
 TWEAK_NAME = FolderX
 FolderX_FILES = Tweak.xm FXCore.mm FXInterface.mm FXDrop.xm FXMenu.xm FXTransition.xm FXListHit.xm FXDiag.mm
-FolderX_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -DFX_DIAG_DEFAULT_ON=1 
+FolderX_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -DFX_DIAG_DEFAULT_ON=1 -DFX_NATIVE_GRID_ONLY=1 
 FolderX_FRAMEWORKS = UIKit Foundation QuartzCore CoreGraphics
 
 include $(THEOS)/makefiles/common.mk
